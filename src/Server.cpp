@@ -75,22 +75,20 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         flag = false;
                         break;
                     }
-                }else if(ch == '+' && i>0){
-                     if(i==0){ flag=false; break; }
-                    char prev = pattern[i-1];
-                    int cnt =0;
-                    while(ptr<sub.size() && sub[ptr] == prev){
+                }else if (ch == '+' && i > 0) {
+                    char prev = pattern[i - 1];
+                    int cnt = 0;
+                    while (ptr < (int)sub.size() && sub[ptr] == prev) {
                         ptr++;
                         cnt++;
                     }
-                    if(cnt == 0){
+                    if (cnt == 0) {
                         flag = false;
                         break;
-                    }continue;
-                }else if(ch != ' ' && ch != sub[ptr]){// // If not special (\d or \w), then it must match exactly (except space handling)
-                    flag = false;
-                    break;
+                    }
+                    continue;
                 }
+
                 ptr++;
             }
             cout<<sub<<" "<<flag<<endl;
