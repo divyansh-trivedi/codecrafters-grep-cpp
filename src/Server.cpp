@@ -24,20 +24,16 @@ bool match_pattern(const string& input_line, const string& pattern) {
         return (input_line.find_first_not_of(str) != string::npos);
     }
     else if(pattern[pattern.size()-1] == '$' ){
-        string temp = pattern.substr(0,pattern.size()-1);
+        string temp = pattern.substr(0, pattern.size()-1);
+
         if(pattern[0] == '^')
-        temp = pattern.substr(1,pattern.size()-2);
+            temp = pattern.substr(1, pattern.size()-2);
 
+        // Instead of checking from start, check if input_line ends with temp
         if(input_line.size() < temp.size()) return false;
-
-        int start = input_line.size() - temp.size();
-        for(int i = 0; i < temp.size(); i++) {
-            if(input_line[start + i] != temp[i]) {
-                return false;
-            }
-        }
-        return true;
+        return input_line.compare(input_line.size() - temp.size(), temp.size(), temp) == 0;
     }
+
     else if(pattern[0] == '^'){
         for(int i=1;i<pattern.size();i++){
             if(pattern[i] != input_line[i-1])return false;
