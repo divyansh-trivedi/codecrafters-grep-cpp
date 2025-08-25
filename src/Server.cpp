@@ -3,42 +3,42 @@
 
 using namespace std;
 
-bool match(const string& text, const string& pattern) {
-    for (int i = 0; i <= text.size(); i++) {
+// helper: try to match pattern[j...] at text[i...]
+bool match_at_position(const string& text, int i, const string& pattern, int j) {
+    if (j == pattern.size()) return true;   // fully matched
+    if (i == text.size()) return false;     // text ended early
+
+    if (pattern[j] == '\\') {  // handle escape sequences
+        if (j+1 < pattern.size()) {
+            char c = text[i];
+            if (pattern[j+1] == 'd' && isdigit(c))
+                return match_at_position(text, i+1, pattern, j+2);
+            if (pattern[j+1] == 'w' && (isalnum(c) || c == '_'))
+                return match_at_position(text, i+1, pattern, j+2);
+        }
+    } else {  // literal character
+        if (text[i] == pattern[j])
+            return match_at_position(text, i+1, pattern, j+1);
+    }
+    return false;
+}
+
+// entry point used by main()
+bool match_pattern(const string& text, const string& pattern) {
+    for (int i = 0; i <= (int)text.size(); i++) {
         if (match_at_position(text, i, pattern, 0))
             return true;
     }
     return false;
 }
-bool match_at_position(const string& text, int i, const string& pattern, int j) {
-    if (j == pattern.size()) return true; // fully matched
-    if (i == text.size()) return false;   // text ended early
 
-    if (pattern[j] == '\\') { // handle special class
-        if (j+1 < pattern.size()) {
-            char c = text[i];
-            if (pattern[j+1] == 'd' && isdigit(c))
-                return match_at_position(text, i+1, pattern, j+2);
-            if (pattern[j+1] == 'w' && isalnum(c))
-                return match_at_position(text, i+1, pattern, j+2);
-        }
-    } else { // literal char
-        if (text[i] == pattern[j])
-            return match_at_position(text, i+1, pattern, j+1);
-    }
-
-    return false;
-}
-
-int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
-
-    // Flush after every std::cout / std::cerr
-    cout << unitbuf;//disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
+int main(int argc, char* argv[]) {
+    cout << unitbuf;
     cerr << unitbuf;
 
     cerr << "Logs from your program will appear here" << endl;
 
-    if (argc != 3) { // if 3 argumnets return because we need 2
+    if (argc != 3) {
         cerr << "Expected two arguments" << endl;
         return 1;
     }
