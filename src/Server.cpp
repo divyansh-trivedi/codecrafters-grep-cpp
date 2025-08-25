@@ -2,43 +2,82 @@
 #include <string>
 
 using namespace std;
+bool  isDigit(char c){
+    return c>='0' && c<='9';
+}
+bool  isAlpha(char c){
+    return c>='a' && c<='z';
+}
+bool match_pattern(const string& input_line, const string& pattern) {
+    if (pattern.length() == 1) {
+        return input_line.find(pattern) != string::npos;
+    }
+    else if (pattern == "\\d") {
+        // Match any digit character in input_line
+        return input_line.find_first_of("0123456789") != string::npos;
+    }
+    else if(pattern == "\\w"){
+        return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos;
+    }
+    else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
+        string str = pattern.substr(2,pattern.size()-3); // substr(position , count)
+        return (input_line.find_first_not_of(str) != string::npos);
+    }
+    else if(pattern.size() >=3 && pattern[0] == '[' && pattern[pattern.size()-1] == ']'){
+        string str = pattern.substr(1,pattern.size()-2);
+        return input_line.find_first_of(str) != string::npos;
+    }else if(true){
+        int len = input_line.size();
 
-// helper: try to match pattern[j...] at text[i...]
-bool match_at_position(const string& text, int i, const string& pattern, int j) {
-    if (j == pattern.size()) return true;   // fully matched
-    if (i == text.size()) return false;     // text ended early
+        for(int j=0;j<len;j++){
+            string sub = input_line.substr(j);// substring
+            int ptr = 0;// to traverse in string 
+            bool flag = true;// false when nothing matches
 
-    if (pattern[j] == '\\') {  // handle escape sequences
-        if (j+1 < pattern.size()) {
-            char c = text[i];
-            if (pattern[j+1] == 'd' && isdigit(c))
-                return match_at_position(text, i+1, pattern, j+2);
-            if (pattern[j+1] == 'w' && (isalnum(c) || c == '_'))
-                return match_at_position(text, i+1, pattern, j+2);
+            for(int i=0;i<pattern.size();i++){
+                char ch =  pattern[i];
+
+                if(ptr >= sub.size()){// if exceedes
+                    flag = false;
+                    break;
+                }
+                if(ch == '\\')continue; 
+                if(ch == 'd' && i-1>=0 && pattern[i-1] == '\\'){// 0 to 9
+                    if(!isDigit(sub[ptr])){
+                        flag = false;
+                        break;
+                    }
+                }else if(ch == 'w' && i-1>=0 && sub[i-1] == '\\'){// A-Z, a-z , 0-9,'_'
+                    char c = sub[ptr];
+                    if((isalpha(c) || isDigit(c) || c=='_') == false){
+                        flag = false;
+                        break;
+                    }
+                }else if(ch != ' ' && ch != sub[ptr]){// // If not special (\d or \w), then it must match exactly (except space handling)
+                    flag = false;
+                    break;
+                }
+                ptr++;
+            }
+            cout<<sub<<" "<<flag<<endl;
+            if(flag)return true;
         }
-    } else {  // literal character
-        if (text[i] == pattern[j])
-            return match_at_position(text, i+1, pattern, j+1);
+        return false;
     }
-    return false;
+    else {
+        throw runtime_error("Unhandled pattern " + pattern);
+    }
 }
 
-// entry point used by main()
-bool match_pattern(const string& text, const string& pattern) {
-    for (int i = 0; i <= (int)text.size(); i++) {
-        if (match_at_position(text, i, pattern, 0))
-            return true;
-    }
-    return false;
-}
+int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
 
-int main(int argc, char* argv[]) {
-    cout << unitbuf;
+    // Flush after every std::cout / std::cerr
+    cout << unitbuf;//disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
     cerr << unitbuf;
 
     cerr << "Logs from your program will appear here" << endl;
 
-    if (argc != 3) {
+    if (argc != 3) { // if 3 argumnets return because we need 2
         cerr << "Expected two arguments" << endl;
         return 1;
     }
