@@ -31,6 +31,11 @@ bool match_pattern(const string& input_line, const string& pattern) {
             if(pattern[i] != input_line[i-1])return false;
         }
         return true;
+    }else if(pattern[pattern.size()-1] == '$'){
+        for(int i=0;i<pattern.size()-1;i++){
+            if(pattern[i] != input_line[i])return false;
+        }
+        return true;
     }
     else if(true){
         int len = input_line.size();
