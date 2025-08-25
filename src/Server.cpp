@@ -3,20 +3,39 @@
 
 using namespace std;
 
-bool match_at_position(const string& input,const string& pattern, size_t pos){
-    if(pos + pattern.size() > input.size())return false;
-
-    for(size_t i=0;i<pattern.size();i++){
-        if(input[pos+i] != pattern[i])return false;
-    }
-    return true;
+bool is_digit(char c) {
+    return c >= '0' && c <= '9';
 }
-bool match(const string& input,const string& pattern){
-    for(size_t i=0;i<=input.size();i++){
-        if(match_at_position(input, pattern ,i))return true;
+
+bool match_sequence(const string& input, const string& pattern) {
+    for (size_t i = 0; i + pattern.size() <= input.size(); i++) {
+        bool ok = true;
+        size_t j = 0;
+        for (; j < pattern.size(); j++) {
+            if (pattern[j] == '\\' && j + 1 < pattern.size()) {
+                if (pattern[j + 1] == 'd') {
+                    if (!is_digit(input[i + j])) { ok = false; break; }
+                    j++; // skip 'd'
+                }
+                else if (pattern[j + 1] == 'w') {
+                    if (!isalnum(static_cast<unsigned char>(input[i + j])) && input[i + j] != '_') { ok = false; break; }
+                    j++; // skip 'w'
+                }
+                else {
+                    ok = false;
+                    break;
+                }
+            }
+            else if (input[i + j] != pattern[j]) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) return true;
     }
     return false;
 }
+
 
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.length() == 1) {
