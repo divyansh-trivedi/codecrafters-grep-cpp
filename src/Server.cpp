@@ -26,17 +26,19 @@ bool match_pattern(const string& input_line, const string& pattern) {
     else if(pattern.size() >=3 && pattern[0] == '[' && pattern[pattern.size()-1] == ']'){
         string str = pattern.substr(1,pattern.size()-2);
         return input_line.find_first_of(str) != string::npos;
-    }else if(pattern[0] == '^'){
+    }else if(pattern[pattern.size()-1] == '$' ){
+        if(pattern.size()-1 != input_line.size())return false;
+        for(int i=0;i<pattern.size()-1;i++){
+            if(pattern[i] != input_line[i])return false;
+        }
+        return true;
+    }
+    else if(pattern[0] == '^'){
         for(int i=1;i<pattern.size();i++){
             if(pattern[i] != input_line[i-1])return false;
         }
         return true;
-    }else if(!pattern.empty() && pattern.back() == '$') {
-    string core_pattern = pattern.substr(0, pattern.size() - 1); // remove trailing $
-    if(input_line.size() < core_pattern.size()) return false;
-    // check if input_line ends with core_pattern
-    return input_line.compare(input_line.size() - core_pattern.size(), core_pattern.size(), core_pattern) == 0;
-}
+    }
     else if(true){
         int len = input_line.size();
 
