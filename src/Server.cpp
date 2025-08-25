@@ -28,8 +28,13 @@ bool match_pattern(const string& input_line, const string& pattern) {
         if(pattern[0] == '^')
         temp = pattern.substr(1,pattern.size()-2);
 
-        for(int i=0;i<temp.size();i++){
-            if(temp[i] != input_line[i])return false;
+        if(input_line.size() < temp.size()) return false;
+
+        int start = input_line.size() - temp.size();
+        for(int i = 0; i < temp.size(); i++) {
+            if(input_line[start + i] != temp[i]) {
+                return false;
+            }
         }
         return true;
     }
