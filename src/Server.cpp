@@ -47,7 +47,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         flag = false;
                         break;
                     }
-                }else if(ch == 'w' && i-1>=0 && sub[i-1] == '\\'){// A-Z, a-z , 0-9,'_'
+                }else if(ch == 'w' && i-1>=0 && pattern[i-1] == '\\'){// A-Z, a-z , 0-9,'_'
                     char c = sub[ptr];
                     if((isalpha(c) || isDigit(c) || c=='_') == false){
                         flag = false;
