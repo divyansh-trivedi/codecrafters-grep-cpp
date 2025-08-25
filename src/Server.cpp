@@ -2,84 +2,79 @@
 #include <string>
 
 using namespace std;
-bool  isDigit(char c){
-    return c>='0' && c<='9';
+bool isDigit(char c) {
+    return c >= '0' && c <= '9';
 }
-bool  isAlpha(char c){
-    return c>='a' && c<='z';
+bool isAlpha(char c) {
+    return c >= 'a' && c <= 'z';
 }
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.length() == 1) {
         return input_line.find(pattern) != string::npos;
     }
     else if (pattern == "\\d") {
-        // Match any digit character in input_line
         return input_line.find_first_of("0123456789") != string::npos;
     }
-    else if(pattern == "\\w"){
+    else if (pattern == "\\w") {
         return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos;
     }
-    else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
-        string str = pattern.substr(2,pattern.size()-3); // substr(position , count)
+    else if (pattern.size() >= 4 && pattern[0] == '[' && pattern[1] == '^' && pattern[pattern.size() - 1] == ']') {
+        string str = pattern.substr(2, pattern.size() - 3);
         return (input_line.find_first_not_of(str) != string::npos);
     }
-    else if(pattern.size() >= 3 && pattern[0] == '[' && pattern[pattern.size()-1]== ']'){
-        string str = pattern.substr(1,pattern.size()-2);
+    else if (pattern.size() >= 3 && pattern[0] == '[' && pattern[pattern.size() - 1] == ']') {
+        string str = pattern.substr(1, pattern.size() - 2);
         return input_line.find_first_of(str) != string::npos;
     }
-    else if(pattern[pattern.size()-1] == '$' ){ // for eg pinapple123 is not pinapple$ because it should end with ple not 123
-        string temp = pattern.substr(0, pattern.size()-1);
-
-        if(pattern[0] == '^')
-            temp = pattern.substr(1, pattern.size()-2);
-
-         if(input_line.size() < temp.size()) return false;
-
-        int start = input_line.size() - temp.size(); // start comparing from end
-        for(int i = 0; i < temp.size(); i++){
-            if(input_line[start + i] != temp[i]) return false;
+    else if (pattern[pattern.size() - 1] == '$') {
+        string temp = pattern.substr(0, pattern.size() - 1);
+        if (pattern[0] == '^')
+            temp = pattern.substr(1, pattern.size() - 2);
+        if (input_line.size() < temp.size()) return false;
+        int start = input_line.size() - temp.size();
+        for (int i = 0; i < (int)temp.size(); i++) {
+            if (input_line[start + i] != temp[i]) return false;
         }
         return true;
     }
-
-    else if(pattern[0] == '^'){
-        for(int i=1;i<pattern.size();i++){
-            if(pattern[i] != input_line[i-1])return false;
+    else if (pattern[0] == '^') {
+        for (int i = 1; i < (int)pattern.size(); i++) {
+            if (pattern[i] != input_line[i - 1]) return false;
         }
         return true;
     }
-    else if(true){
+    else if (true) {
         int len = input_line.size();
+        for (int j = 0; j < len; j++) {
+            string sub = input_line.substr(j);
+            int ptr = 0;
+            bool flag = true;
 
-        for(int j=0;j<len;j++){
-            string sub = input_line.substr(j);// substring
-            int ptr = 0;// to traverse in string 
-            bool flag = true;// false when nothing matches
-
-            for(int i=0;i<pattern.size();i++){
-                char ch =  pattern[i];
-
-                if(ptr >= sub.size()){// if exceedes
+            for (int i = 0; i < (int)pattern.size(); i++) {
+                char ch = pattern[i];
+                if (ptr >= (int)sub.size()) {
                     flag = false;
                     break;
                 }
-                if(ch == '\\')continue; 
-                if(ch == 'd' && i-1>=0 && pattern[i-1] == '\\'){// 0 to 9
-                    if(!isDigit(sub[ptr])){
+                if (ch == '\\') continue;
+                if (ch == 'd' && i - 1 >= 0 && pattern[i - 1] == '\\') {
+                    if (!isDigit(sub[ptr])) {
                         flag = false;
                         break;
                     }
-                }else if(ch == 'w' && i-1>=0 && pattern[i-1] == '\\'){// A-Z, a-z , 0-9,'_'
+                }
+                else if (ch == 'w' && i - 1 >= 0 && pattern[i - 1] == '\\') {
                     char c = sub[ptr];
-                    if((isalpha(c) || isDigit(c) || c=='_') == false){
+                    if ((isalpha(c) || isDigit(c) || c == '_') == false) {
                         flag = false;
                         break;
                     }
-                }else if (ch == '+' && i > 0) {
+                }
+
+                // ----------- CHANGED BLOCK START --------------
+                else if (ch == '+' && i > 0) {
                     char prev = pattern[i - 1];
                     int cnt = 0;
-
-                    // Match one or more of prev char
                     while (ptr < (int)sub.size() && sub[ptr] == prev) {
                         ptr++;
                         cnt++;
@@ -88,72 +83,18 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         flag = false;
                         break;
                     }
-
-                    bool rest_matches = false;
-                    for (int skip = 0; skip <= cnt; ++skip) {
-                        string sub_rest = sub.substr(ptr - cnt + skip);
-                        int p = i + 1;
-                        int s = 0;
-                        bool local_flag = true;
-
-                        while (p < (int)pattern.size() && local_flag) {
-                            if (s >= (int)sub_rest.size()) {
-                                local_flag = false;
-                                break;
-                            }
-                            char pc = pattern[p];
-
-                            if (pc == '\\') {
-                                p++;
-                                if (p >= (int)pattern.size()) {
-                                    local_flag = false;
-                                    break;
-                                }
-                                char next_pc = pattern[p];
-                                if (next_pc == 'd') {
-                                    if (!(s < (int)sub_rest.size() && isDigit(sub_rest[s]))) {
-                                        local_flag = false;
-                                        break;
-                                    }
-                                } else if (next_pc == 'w') {
-                                    char c = sub_rest[s];
-                                    if (!(isAlpha(c) || isDigit(c) || c == '_')) {
-                                        local_flag = false;
-                                        break;
-                                    }
-                                } else {
-                                    if (sub_rest[s] != next_pc) {
-                                        local_flag = false;
-                                        break;
-                                    }
-                                }
-                            } else {
-                                if (!(s < (int)sub_rest.size() && sub_rest[s] == pc)) {
-                                    local_flag = false;
-                                    break;
-                                }
-                            }
-                            p++;
-                            s++;
-                        }
-
-                        if (local_flag) {
-                            rest_matches = true;
-                            break;
-                        }
-                    }
-
-                    if (!rest_matches) {
-                        flag = false;
-                        break;
-                    }
-                    i++; // Skip the '+' quantifier
                     continue;
+                }
+                // ----------- CHANGED BLOCK END ----------------
+
+                else if (ch != ' ' && ch != sub[ptr]) {
+                    flag = false;
+                    break;
                 }
                 ptr++;
             }
-            cout<<sub<<" "<<flag<<endl;
-            if(flag)return true;
+            cout << sub << " " << flag << endl;
+            if (flag) return true;
         }
         return false;
     }
@@ -162,38 +103,31 @@ bool match_pattern(const string& input_line, const string& pattern) {
     }
 }
 
-int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
-
-    // Flush after every std::cout / std::cerr
+int main(int argc, char* argv[]) {
     cout << unitbuf;
-    //disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
     cerr << unitbuf;
-
     cerr << "Logs from your program will appear here" << endl;
-
-    if (argc != 3) { // if 3 argumnets return because we need 2
+    if (argc != 3) {
         cerr << "Expected two arguments" << endl;
         return 1;
     }
-
     string flag = argv[1];
     string pattern = argv[2];
-
     if (flag != "-E") {
         cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
-
     string input_line;
     getline(cin, input_line);
-
     try {
         if (match_pattern(input_line, pattern)) {
             return 0;
-        } else {
+        }
+        else {
             return 1;
         }
-    } catch (const runtime_error& e) {
+    }
+    catch (const runtime_error& e) {
         cerr << e.what() << endl;
         return 1;
     }
