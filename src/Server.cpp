@@ -12,10 +12,14 @@ bool match_pattern(const string& input_line, const string& pattern) {
         return input_line.find_first_of("0123456789") != string::npos;
     }
     else if(pattern == "\\w"){
-        return input_line.find_first_of("0123456789") != string::npos || 
-        input_line.find_first_of("abcdefghijklmnopqrstuvwxyz") != string::npos||
-        input_line.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") != string::npos ||
-        input_line.find("_") != string:: npos;
+        return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != std::string::npos;
+    }
+    else if(pattern == "[]"){
+        for(int i=1;i<pattern.size()-2;i++){
+            bool ans  = input_line.find_first_of(pattern[i]);
+            if(ans)return true;
+        }
+        return false;
     }
     else {
         throw runtime_error("Unhandled pattern " + pattern);
