@@ -27,9 +27,12 @@ bool match_pattern(const string& input_line, const string& pattern) {
         string str = pattern.substr(1,pattern.size()-2);
         return input_line.find_first_of(str) != string::npos;
     }else if(pattern[pattern.size()-1] == '$' ){
-        if(pattern.size()-1 != input_line.size())return false;
-        for(int i=0;i<pattern.size()-1;i++){
-            if(pattern[i] != input_line[i])return false;
+        string temp = pattern.substr(0,pattern.size()-1);
+        if(pattern[0] == '^')
+        temp = pattern.substr(1,pattern.size()-1);
+
+        for(int i=0;i<temp.size();i++){
+            if(temp[i] != input_line[i])return false;
         }
         return true;
     }
