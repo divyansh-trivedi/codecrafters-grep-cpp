@@ -12,8 +12,10 @@ bool match_pattern(const string& input_line, const string& pattern) {
         return input_line.find_first_of("0123456789") != string::npos;
     }
     else if(pattern == "\\w"){
-        return input_line.find_first_of("0123456789") || input_line.find_first_of("abcdefghijklmnopqrstuvwxyz")
-                || input_line.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") || input_line.find("_");
+        return input_line.find_first_of("0123456789") != string::npos || 
+        input_line.find_first_of("abcdefghijklmnopqrstuvwxyz") != string::npos||
+        input_line.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") != string::npos ||
+        input_line.find("_") != string:: npos;
     }
     else {
         throw runtime_error("Unhandled pattern " + pattern);
