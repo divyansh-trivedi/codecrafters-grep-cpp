@@ -27,7 +27,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
         string str = pattern.substr(1,pattern.size()-2);
         return input_line.find_first_of(str) != string::npos;
     }
-    else if(pattern[pattern.size()-1] == '$' ){
+    else if(pattern[pattern.size()-1] == '$' ){ // for eg pinapple123 is not pinapple$ because it should end with ple not 123
         string temp = pattern.substr(0, pattern.size()-1);
 
         if(pattern[0] == '^')
@@ -75,6 +75,17 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         flag = false;
                         break;
                     }
+                }else if(ch == '+' && i>0){
+                    char prev = pattern[i-1];
+                    int cnt =0;
+                    while(ptr<sub.size() && sub[ptr] == prev){
+                        ptr++;
+                        cnt++;
+                    }
+                    if(cnt == 0){
+                        flag = false;
+                        break;
+                    }
                 }else if(ch != ' ' && ch != sub[ptr]){// // If not special (\d or \w), then it must match exactly (except space handling)
                     flag = false;
                     break;
@@ -94,7 +105,8 @@ bool match_pattern(const string& input_line, const string& pattern) {
 int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
 
     // Flush after every std::cout / std::cerr
-    cout << unitbuf;//disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
+    cout << unitbuf;
+    //disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
     cerr << unitbuf;
 
     cerr << "Logs from your program will appear here" << endl;
