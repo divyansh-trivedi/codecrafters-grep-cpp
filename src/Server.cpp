@@ -14,7 +14,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
     else if(pattern == "\\w"){
         return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != std::string::npos;
     }
-    else if(pattern.size() >=3 && pattern[0] == '[' && pattern[patten.size()-1] == ']'){
+    else if(pattern.size() >=3 && pattern[0] == '[' && pattern[pattern.size()-1] == ']'){
         string str = pattern.substr(1,pattern.size()-2);
         return input_line.find(str) != string::npos;
     }
