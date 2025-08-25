@@ -11,19 +11,24 @@ bool match_pattern(const string& input_line, const string& pattern) {
         // Match any digit character in input_line
         return input_line.find_first_of("0123456789") != string::npos;
     }
+    else if(pattern == "\\w"){
+        return input_line.find_first_of("0123456789") || input_line.find_first_of("abcdefghijklmnopqrstuvwxyz")
+                || input_line.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") || input_line.find("_");
+    }
     else {
         throw runtime_error("Unhandled pattern " + pattern);
     }
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
+
     // Flush after every std::cout / std::cerr
-    cout << unitbuf;
+    cout << unitbuf;//disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
     cerr << unitbuf;
 
     cerr << "Logs from your program will appear here" << endl;
 
-    if (argc != 3) {
+    if (argc != 3) { // if 3 argumnets return because we need 2
         cerr << "Expected two arguments" << endl;
         return 1;
     }
