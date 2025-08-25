@@ -78,6 +78,8 @@ bool match_pattern(const string& input_line, const string& pattern) {
                 }else if (ch == '+' && i > 0) {
                     char prev = pattern[i - 1];
                     int cnt = 0;
+
+                    // Match one or more of prev char
                     while (ptr < (int)sub.size() && sub[ptr] == prev) {
                         ptr++;
                         cnt++;
@@ -86,9 +88,68 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         flag = false;
                         break;
                     }
+
+                    bool rest_matches = false;
+                    for (int skip = 0; skip <= cnt; ++skip) {
+                        string sub_rest = sub.substr(ptr - cnt + skip);
+                        int p = i + 1;
+                        int s = 0;
+                        bool local_flag = true;
+
+                        while (p < (int)pattern.size() && local_flag) {
+                            if (s >= (int)sub_rest.size()) {
+                                local_flag = false;
+                                break;
+                            }
+                            char pc = pattern[p];
+
+                            if (pc == '\\') {
+                                p++;
+                                if (p >= (int)pattern.size()) {
+                                    local_flag = false;
+                                    break;
+                                }
+                                char next_pc = pattern[p];
+                                if (next_pc == 'd') {
+                                    if (!(s < (int)sub_rest.size() && isDigit(sub_rest[s]))) {
+                                        local_flag = false;
+                                        break;
+                                    }
+                                } else if (next_pc == 'w') {
+                                    char c = sub_rest[s];
+                                    if (!(isAlpha(c) || isDigit(c) || c == '_')) {
+                                        local_flag = false;
+                                        break;
+                                    }
+                                } else {
+                                    if (sub_rest[s] != next_pc) {
+                                        local_flag = false;
+                                        break;
+                                    }
+                                }
+                            } else {
+                                if (!(s < (int)sub_rest.size() && sub_rest[s] == pc)) {
+                                    local_flag = false;
+                                    break;
+                                }
+                            }
+                            p++;
+                            s++;
+                        }
+
+                        if (local_flag) {
+                            rest_matches = true;
+                            break;
+                        }
+                    }
+
+                    if (!rest_matches) {
+                        flag = false;
+                        break;
+                    }
+                    i++; // Skip the '+' quantifier
                     continue;
                 }
-
                 ptr++;
             }
             cout<<sub<<" "<<flag<<endl;
