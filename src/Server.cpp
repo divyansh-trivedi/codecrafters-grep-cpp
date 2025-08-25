@@ -3,62 +3,31 @@
 
 using namespace std;
 
-bool is_digit(char c) {
-    return c >= '0' && c <= '9';
-}
-
-bool match_sequence(const string& input, const string& pattern) {
-    for (size_t i = 0; i + pattern.size() <= input.size(); i++) {
-        bool ok = true;
-        size_t j = 0;
-        for (; j < pattern.size(); j++) {
-            if (pattern[j] == '\\' && j + 1 < pattern.size()) {
-                if (pattern[j + 1] == 'd') {
-                    if (!is_digit(input[i + j])) { ok = false; break; }
-                    j++; // skip 'd'
-                }
-                else if (pattern[j + 1] == 'w') {
-                    if (!isalnum(static_cast<unsigned char>(input[i + j])) && input[i + j] != '_') { ok = false; break; }
-                    j++; // skip 'w'
-                }
-                else {
-                    ok = false;
-                    break;
-                }
-            }
-            else if (input[i + j] != pattern[j]) {
-                ok = false;
-                break;
-            }
-        }
-        if (ok) return true;
+bool match(const string& text, const string& pattern) {
+    for (int i = 0; i <= text.size(); i++) {
+        if (match_at_position(text, i, pattern, 0))
+            return true;
     }
     return false;
 }
+bool match_at_position(const string& text, int i, const string& pattern, int j) {
+    if (j == pattern.size()) return true; // fully matched
+    if (i == text.size()) return false;   // text ended early
 
+    if (pattern[j] == '\\') { // handle special class
+        if (j+1 < pattern.size()) {
+            char c = text[i];
+            if (pattern[j+1] == 'd' && isdigit(c))
+                return match_at_position(text, i+1, pattern, j+2);
+            if (pattern[j+1] == 'w' && isalnum(c))
+                return match_at_position(text, i+1, pattern, j+2);
+        }
+    } else { // literal char
+        if (text[i] == pattern[j])
+            return match_at_position(text, i+1, pattern, j+1);
+    }
 
-bool match_pattern(const string& input_line, const string& pattern) {
-    if (pattern.length() == 1) {
-        return input_line.find(pattern) != string::npos;
-    }
-    else if (pattern == "\\d") {
-        // Match any digit character in input_line
-        return input_line.find_first_of("0123456789") != string::npos;
-    }
-    else if(pattern == "\\w"){
-        return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos;
-    }
-    else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
-        string str = pattern.substr(2,pattern.size()-3); // substr(position , count)
-        return (input_line.find_first_not_of(str) != string::npos);
-    }
-    else if(pattern.size() >=3 && pattern[0] == '[' && pattern[pattern.size()-1] == ']'){
-        string str = pattern.substr(1,pattern.size()-2);
-        return input_line.find_first_of(str) != string::npos;
-    }
-    else {
-        throw runtime_error("Unhandled pattern " + pattern);
-    }
+    return false;
 }
 
 int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
