@@ -85,7 +85,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
                     if(cnt == 0){
                         flag = false;
                         break;
-                    }
+                    }continue;
                 }else if(ch != ' ' && ch != sub[ptr]){// // If not special (\d or \w), then it must match exactly (except space handling)
                     flag = false;
                     break;
