@@ -18,6 +18,10 @@ bool match_pattern(const string& input_line, const string& pattern) {
         string str = pattern.substr(1,pattern.size()-2);
         return input_line.find_first_of(str) != string::npos;
     }
+    else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
+        string str = pattern.substr(2,pattern.size()-2);
+        return !(input_line.find_first_of(str) != string::npos);
+    }
     else {
         throw runtime_error("Unhandled pattern " + pattern);
     }
