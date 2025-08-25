@@ -33,9 +33,10 @@ bool match_pattern(const string& input_line, const string& pattern) {
         if(pattern[0] == '^')
             temp = pattern.substr(1, pattern.size()-2);
 
-        // Instead of checking from start, check if input_line ends with temp
-        if(input_line.size() < temp.size()) return false;
-        return input_line.compare(input_line.size() - temp.size(), temp.size(), temp) == 0;
+        for(int i=0;i<temp.size();i++){
+            if(input_line[i] != pattern[i])return false;
+        }
+        return true;
     }
 
     else if(pattern[0] == '^'){
