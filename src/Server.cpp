@@ -19,7 +19,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
         return input_line.find_first_of(str) != string::npos;
     }
     else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
-        string str = pattern.substr(2,pattern.size()-2);
+        string str = pattern.substr(2,pattern.size()-3); // substr(position , count)
         return (input_line.find_first_not_of(str) != string::npos);
     }
     else {
