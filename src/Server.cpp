@@ -3,6 +3,21 @@
 
 using namespace std;
 
+bool match_at_position(const string& input,const string& pattern, size_t pos){
+    if(pos + pattern.size() > input.size())return false;
+
+    for(size_t i=0;i<pattern.size();i++){
+        if(input[pos+i] != pattern[i])return false;
+    }
+    return true;
+}
+bool match(const string& input,const string& pattern){
+    for(size_t i=0;i<=input.size();i++){
+        if(match_at_position(input, pattern ,i))return true;
+    }
+    return false;
+}
+
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.length() == 1) {
         return input_line.find(pattern) != string::npos;
