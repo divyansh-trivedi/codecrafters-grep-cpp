@@ -28,7 +28,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
         return input_line.find_first_of(str) != string::npos;
     }else if(pattern[0] == '^'){
         for(int i=1;i<pattern.size();i++){
-            if(pattern[i] != input_line[i])return false;
+            if(pattern[i] != input_line[i-1])return false;
         }
         return true;
     }
