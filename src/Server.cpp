@@ -65,7 +65,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
                 }
                 if(i+1 < pattern.size()&&pattern[i+1]  == '+'){
                     int cnt =0;
-                    while (ptr<sub.size() && pattern[i+1] == '+')
+                    while (ptr<sub.size()  && sub[ptr] == ch)
                     {
                         ptr++;
                         cnt++;
