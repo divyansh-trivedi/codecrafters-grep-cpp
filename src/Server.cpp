@@ -65,12 +65,12 @@ bool match_pattern(const string& input_line, const string& pattern) {
                 }
                 if(i+1 < pattern.size()&&pattern[i+1]  == '+'){
                     int cnt =0;
-                    while (ptr<sub.size()  && sub[ptr] == ch)
+                    while (ptr<sub.size()  && (sub[ptr] == ch) || ch == '.')
                     {
                         ptr++;
                         cnt++;
                     }
-                    if(i+2 < pattern.size() && pattern[i+2] == ch){
+                    if(i+2 < pattern.size() && (pattern[i+2] == ch) || ch == '.'){
                         if(cnt > 0){
                             ptr--;
                         }
@@ -81,9 +81,9 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         break;
                     }
                     i++;
-                }else if (i + 1 < (int)pattern.size() && pattern[i + 1] == '?') {
+                }else if (i + 1 < pattern.size() && pattern[i + 1] == '?') {
                     // It's optional, so we only advance the input pointer if it matches.
-                    if (ptr < (int)sub.size() && sub[ptr] == ch) {
+                    if (ptr < sub.size() &&&& (ch == '.' || sub[ptr] == ch)) {
                         ptr++;
                     }
                     i++; // Always advance the pattern pointer past '?'
@@ -104,7 +104,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         break;
                     }
                 }else{
-                    if(ch != sub[ptr]){
+                    if(ch != '.' && ch != sub[ptr]){
                         flag = false;
                         break;
                     }
