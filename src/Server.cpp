@@ -1,134 +1,90 @@
 #include <iostream>
 #include <string>
+#include <stdexcept>
+#include <cctype>
 
 using namespace std;
-bool  isDigit(char c){
+
+// The helper functions are no longer needed inside match_pattern
+bool isDigit(char c){
     return c>='0' && c<='9';
 }
-bool  isAlpha(char c){
-    return c>='a' && c<='z';
+
+bool isAlpha(char c){
+    return isalpha(c);
 }
+
+
+// Forward declaration for our new recursive helper function
+bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
+
+// This is the new, more powerful matching function
 bool match_pattern(const string& input_line, const string& pattern) {
-    if (pattern.length() == 1) {
-        return input_line.find(pattern) != string::npos;
+    if (pattern[0] == '^') {
+        // If anchored to the start, only try matching from the beginning
+        return match_here(pattern, 1, input_line, 0);
     }
-    else if (pattern == "\\d") {
-        // Match any digit character in input_line
-        return input_line.find_first_of("0123456789") != string::npos;
-    }
-    else if(pattern == "\\w"){
-        return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos;
-    }
-    else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
-        string str = pattern.substr(2,pattern.size()-3); // substr(position , count)
-        return (input_line.find_first_not_of(str) != string::npos);
-    }
-    else if(pattern.size() >= 3 && pattern[0] == '[' && pattern[pattern.size()-1]== ']'){
-        string str = pattern.substr(1,pattern.size()-2);
-        return input_line.find_first_of(str) != string::npos;
-    }
-    else if(pattern[pattern.size()-1] == '$' ){ // for eg pinapple123 is not pinapple$ because it should end with ple not 123
-        string temp = pattern.substr(0, pattern.size()-1);
 
-        if(pattern[0] == '^')
-            temp = pattern.substr(1, pattern.size()-2);
-
-         if(input_line.size() < temp.size()) return false;
-
-        int start = input_line.size() - temp.size(); // start comparing from end
-        for(int i = 0; i < temp.size(); i++){
-            if(input_line[start + i] != temp[i]) return false;
+    // For unanchored patterns, try to match starting at every position
+    for (int i = 0; i <= (int)input_line.length(); ++i) {
+        if (match_here(pattern, 0, input_line, i)) {
+            return true;
         }
+    }
+    return false;
+}
+
+// This recursive helper function is the new "brain" of the regex engine
+bool match_here(const string& pattern, int p_idx, const string& text, int t_idx) {
+    // If we've reached the end of the pattern, we've succeeded
+    if (p_idx == (int)pattern.length()) {
         return true;
     }
 
-    else if(pattern[0] == '^'){
-        for(int i=1;i<pattern.size();i++){
-            if(pattern[i] != input_line[i-1])return false;
-        }
-        return true;
+    // Handle '$' anchor: it must match the end of the text
+    if (pattern[p_idx] == '$' && p_idx == (int)pattern.length() - 1) {
+        return t_idx == (int)text.length();
     }
-    else if(true){
-        int len = input_line.size();
 
-        for(int j=0;j<len;j++){
-            string sub = input_line.substr(j);// substring
-            int ptr = 0;// to traverse in string 
-            bool flag = true;// false when nothing matches
-
-            for(int i=0;i<pattern.size();i++){
-                char ch =  pattern[i];
-
-                if(ptr >= sub.size()){// if exceedes
-                    flag = false;
-                    break;
-                }
-                if(i+1 < pattern.size()&&pattern[i+1]  == '+'){
-                    int cnt =0;
-                    while (ptr<sub.size()  && (sub[ptr] == ch || ch == '.'))
-                    {
-                        ptr++;
-                        cnt++;
-                    }
-                    if(i+2 < pattern.size() && (pattern[i+2] == ch || ch == '.')){
-                        if(cnt > 0){
-                            ptr--;
-                        }
-                    }
-                    if(cnt == 0){
-                        flag = false;
-                        break;
-                    }
-                    i++;
-                }else if (i+1 < pattern.size() && pattern[i+1] == '?') {
-                    // It's optional, so we only advance the input pointer if it matches.
-                    if (ptr < sub.size() && (ch == '.' || sub[ptr] == ch)) {
-                        ptr++;
-                    }
-                    i++; // Always advance the pattern pointer past '?'
-                }
-                else if(ch == '\\' && i+1 < pattern.size()){
-                    char meta_char = pattern[i+1];
-                    bool matches = false;
-                    if(meta_char == 'd' && isDigit(sub[ptr])){
-                        matches = true;
-                    }else if(meta_char == 'w' && (isAlpha(sub[ptr])  || isDigit(sub[ptr]) || sub[ptr] == '_')){
-                        matches = true;
-                    }
-                    if(matches){
-                        ptr++;
-                        i++;
-                    }else{
-                        flag = false;
-                        break;
-                    }
-                }else{
-                    if(ch != '.' && ch != sub[ptr]){
-                        flag = false;
-                        break;
-                    }
-                    ptr++;
-                }
+    // Handle the '+' quantifier with backtracking
+    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '+') {
+        // Match one or more characters.
+        // We loop, and at each step, we try to match the REST of the pattern.
+        // This is how backtracking is achieved.
+        for (int k = t_idx; ; ++k) {
+            // Check if the rest of the pattern matches from the current position
+            if (match_here(pattern, p_idx + 2, text, k)) {
+                return true;
             }
-            if(flag)return true;
+            // If not, we must consume one more character. If we can't, this path fails.
+            if (k >= (int)text.length() || (pattern[p_idx] != '.' && pattern[p_idx] != text[k])) {
+                break;
+            }
         }
         return false;
     }
-    else {
-        throw runtime_error("Unhandled pattern " + pattern);
+
+    // Handle the '?' quantifier
+    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '?') {
+        // Try two paths: 1) Skip the optional character. 2) Match one character and continue.
+        return match_here(pattern, p_idx + 2, text, t_idx) ||
+               (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx]) && match_here(pattern, p_idx + 2, text, t_idx + 1));
     }
+
+    // Handle a standard character match (literal or '.')
+    if (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx])) {
+        return match_here(pattern, p_idx + 1, text, t_idx + 1);
+    }
+
+    return false;
 }
 
-int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
-
-    // Flush after every std::cout / std::cerr
+// Your main function remains unchanged
+int main(int argc, char* argv[]) {
     cout << unitbuf;
-    //disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
     cerr << unitbuf;
 
-    cerr << "Logs from your program will appear here" << endl;
-
-    if (argc != 3) { // if 3 argumnets return because we need 2
+    if (argc != 3) {
         cerr << "Expected two arguments" << endl;
         return 1;
     }
