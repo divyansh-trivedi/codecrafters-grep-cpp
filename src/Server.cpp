@@ -86,7 +86,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
                     bool matches = false;
                     if(meta_char == 'd' && isDigit(sub[ptr])){
                         matches = true;
-                    }else if(meta_char == 'w' && isAlpha(sub[ptr]  || isDigit(sub[ptr]) || sub[ptr] == '_')){
+                    }else if(meta_char == 'w' && (isAlpha(sub[ptr])  || isDigit(sub[ptr]) || sub[ptr] == '_')){
                         matches = true;
                     }
                     if(matches){
