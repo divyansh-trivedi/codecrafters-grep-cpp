@@ -1,12 +1,17 @@
 #include <iostream>
 #include <string>
+// START OF MODIFICATION: Added for std::runtime_error
+#include <stdexcept>
+// END OF MODIFICATION
 
 using namespace std;
 bool  isDigit(char c){
     return c>='0' && c<='9';
 }
 bool  isAlpha(char c){
-    return c>='a' && c<='z';
+    // START OF MODIFICATION: User's isAlpha was incomplete for \w
+    return isalpha(c);
+    // END OF MODIFICATION
 }
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.length() == 1) {
@@ -35,15 +40,20 @@ bool match_pattern(const string& input_line, const string& pattern) {
 
          if(input_line.size() < temp.size()) return false;
 
-        int start = input_line.size() - temp.size(); // start comparing from end
-        for(int i = 0; i < temp.size(); i++){
+        // START OF MODIFICATION: Corrected types for size comparison
+        size_t start = input_line.size() - temp.size(); // start comparing from end
+        for(size_t i = 0; i < temp.size(); i++){
+        // END OF MODIFICATION
             if(input_line[start + i] != temp[i]) return false;
         }
         return true;
     }
 
     else if(pattern[0] == '^'){
-        for(int i=1;i<pattern.size();i++){
+        // START OF MODIFICATION: Corrected types and logic for start anchor
+        if (input_line.length() < pattern.length() - 1) return false;
+        for(size_t i=1; i<pattern.size(); i++){
+        // END OF MODIFICATION
             if(pattern[i] != input_line[i-1])return false;
         }
         return true;
@@ -56,43 +66,61 @@ bool match_pattern(const string& input_line, const string& pattern) {
             int ptr = 0;// to traverse in string 
             bool flag = true;// false when nothing matches
 
-            for(int i=0;i<pattern.size();i++){
+            // =================================================================
+            // START OF MINIMAL CHANGES TO THIS BLOCK
+            // The logic inside this loop was fundamentally refactored to correctly
+            // handle quantifiers and literal characters.
+            // =================================================================
+            for(int i=0; i < (int)pattern.size(); i++){
                 char ch =  pattern[i];
 
-                if(ptr >= sub.size()){// if exceedes
+                if(ptr >= (int)sub.size()){ // Ran out of text to match
                     flag = false;
                     break;
                 }
-                if(ch == '\\')continue; 
-                if(ch == 'd' && i-1>=0 && pattern[i-1] == '\\'){// 0 to 9
-                    if(!isDigit(sub[ptr])){
-                        flag = false;
-                        break;
-                    }
-                }else if(ch == 'w' && i-1>=0 && pattern[i-1] == '\\'){// A-Z, a-z , 0-9,'_'
-                    char c = sub[ptr];
-                    if((isalpha(c) || isDigit(c) || c=='_') == false){
-                        flag = false;
-                        break;
-                    }
-                }else if (ch == '+' && i > 0) {
-                    char prev = pattern[i - 1];
-                    int cnt = 0;
-                    // Match one or more of prev char in input substring
-                    while (ptr < (int)sub.size() && sub[ptr] == prev) {
+
+                // Lookahead for the '+' quantifier
+                if (i + 1 < (int)pattern.size() && pattern[i + 1] == '+') {
+                    int match_count = 0;
+                    while (ptr < (int)sub.size() && sub[ptr] == ch) {
                         ptr++;
-                        cnt++;
+                        match_count++;
                     }
-                    if (cnt == 0) {
+                    if (match_count == 0) { // '+' requires at least one match
                         flag = false;
                         break;
                     }
-                    // After consuming the repeated chars, continue pattern at i+1, so skip the pointer increment at the end of loop
-                    continue;
+                    i++; // Manually advance pattern index to skip the '+'
+                } else if (ch == '\\' && i + 1 < (int)pattern.size()) {
+                    // Correctly handle meta characters like \d and \w
+                    char meta_char = pattern[i + 1];
+                    bool matches = false;
+                    if (meta_char == 'd' && isDigit(sub[ptr])) {
+                        matches = true;
+                    } else if (meta_char == 'w' && (isAlpha(sub[ptr]) || isDigit(sub[ptr]) || sub[ptr] == '_')) {
+                        matches = true;
+                    }
+
+                    if (matches) {
+                        ptr++;
+                        i++; // Also skip the meta_char itself
+                    } else {
+                        flag = false;
+                        break;
+                    }
+                } else {
+                    // This is the crucial missing piece: handle a normal character match
+                    if (ch != sub[ptr]) {
+                        flag = false;
+                        break;
+                    }
+                    ptr++; // Advance pointer only on a successful match
                 }
-                ptr++;
             }
-            cout<<sub<<" "<<flag<<endl;
+            // =================================================================
+            // END OF MINIMAL CHANGES TO THIS BLOCK
+            // =================================================================
+            
             if(flag)return true;
         }
         return false;
@@ -109,7 +137,7 @@ int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array
     //disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
     cerr << unitbuf;
 
-    cerr << "Logs from your program will appear here" << endl;
+    // cerr << "Logs from your program will appear here" << endl; // Removed for cleaner output
 
     if (argc != 3) { // if 3 argumnets return because we need 2
         cerr << "Expected two arguments" << endl;
