@@ -5,23 +5,21 @@
 
 using namespace std;
 
-// The helper functions are no longer needed inside match_pattern
+// These helpers can be kept for other potential uses or removed
 bool isDigit(char c){
-    return c>='0' && c<='9';
+    return isdigit(c);
 }
 
 bool isAlpha(char c){
     return isalpha(c);
 }
 
-
-// Forward declaration for our new recursive helper function
+// Forward declaration for our recursive helper function
 bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
 
-// This is the new, more powerful matching function
+// The main entry point for matching
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern[0] == '^') {
-        // If anchored to the start, only try matching from the beginning
         return match_here(pattern, 1, input_line, 0);
     }
 
@@ -34,50 +32,48 @@ bool match_pattern(const string& input_line, const string& pattern) {
     return false;
 }
 
-// This recursive helper function is the new "brain" of the regex engine
+// The recursive helper function with the corrected '+' logic
 bool match_here(const string& pattern, int p_idx, const string& text, int t_idx) {
-    // If we've reached the end of the pattern, we've succeeded
     if (p_idx == (int)pattern.length()) {
         return true;
     }
 
-    // Handle '$' anchor: it must match the end of the text
     if (pattern[p_idx] == '$' && p_idx == (int)pattern.length() - 1) {
         return t_idx == (int)text.length();
     }
 
-    // Handle the '+' quantifier with backtracking
+    // =================================================================
+    // START OF CORRECTED '+' LOGIC
+    // =================================================================
     if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '+') {
-        // Match one or more characters.
-        // We loop, and at each step, we try to match the REST of the pattern.
-        // This is how backtracking is achieved.
-        for (int k = t_idx; ; ++k) {
-            // Check if the rest of the pattern matches from the current position
-            if (match_here(pattern, p_idx + 2, text, k)) {
-                return true;
-            }
-            // If not, we must consume one more character. If we can't, this path fails.
-            if (k >= (int)text.length() || (pattern[p_idx] != '.' && pattern[p_idx] != text[k])) {
-                break;
-            }
+        // Step 1: Enforce the "one" part of "one or more".
+        // If it can't match at least one character, it's an immediate failure.
+        if (t_idx >= (int)text.length() || (pattern[p_idx] != '.' && pattern[p_idx] != text[t_idx])) {
+            return false;
         }
-        return false;
-    }
 
-    // Handle the '?' quantifier
+        // Step 2: After matching one character, recursively handle the "or more" part.
+        // This creates the backtracking. It can either...
+        //   a) ...stop matching for '+' and try the rest of the pattern (p_idx + 2).
+        //   b) ...or match another character for '+' and try this same choice again.
+        return match_here(pattern, p_idx + 2, text, t_idx + 1) || match_here(pattern, p_idx, text, t_idx + 1);
+    }
+    // =================================================================
+    // END OF CORRECTED '+' LOGIC
+    // =================================================================
+
     if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '?') {
-        // Try two paths: 1) Skip the optional character. 2) Match one character and continue.
         return match_here(pattern, p_idx + 2, text, t_idx) ||
                (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx]) && match_here(pattern, p_idx + 2, text, t_idx + 1));
     }
 
-    // Handle a standard character match (literal or '.')
     if (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx])) {
         return match_here(pattern, p_idx + 1, text, t_idx + 1);
     }
 
     return false;
 }
+
 
 // Your main function remains unchanged
 int main(int argc, char* argv[]) {
