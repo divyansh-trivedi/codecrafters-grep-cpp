@@ -81,7 +81,14 @@ bool match_pattern(const string& input_line, const string& pattern) {
                         break;
                     }
                     i++;
-                }else if(ch == '\\' && i+1 < pattern.size()){
+                }else if (i + 1 < (int)pattern.size() && pattern[i + 1] == '?') {
+                    // It's optional, so we only advance the input pointer if it matches.
+                    if (ptr < (int)sub.size() && sub[ptr] == ch) {
+                        ptr++;
+                    }
+                    i++; // Always advance the pattern pointer past '?'
+                }
+                else if(ch == '\\' && i+1 < pattern.size()){
                     char meta_char = pattern[i+1];
                     bool matches = false;
                     if(meta_char == 'd' && isDigit(sub[ptr])){
