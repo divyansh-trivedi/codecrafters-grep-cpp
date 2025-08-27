@@ -12,20 +12,40 @@ bool match_here(const string& pattern , int pattern_idx,const string& text, int 
         return text_idx == text.size();
 
     // '+' quantifier
-    if (pattern_idx+1 < pattern.size() && pattern[pattern_idx+1] == '+') {
-        if (text_idx >= text.size() || 
-            (pattern[pattern_idx] != '.' && pattern[pattern_idx] != text[text_idx]))
-            return false;
+if (pattern_idx+1 < pattern.size() && pattern[pattern_idx+1] == '+') {
+    string element;
+    int next_idx = pattern_idx + 1;
 
-        bool notpick = match_here(pattern , pattern_idx+2, text , text_idx+1);
-        bool pick    = match_here(pattern , pattern_idx, text , text_idx+1);
-        return pick || notpick;
+    // Check if it is a group
+    if (pattern[pattern_idx] == '(') {
+        int close = pattern.find(')', pattern_idx);
+        if (close == -1) return false;
+        element = pattern.substr(pattern_idx, close - pattern_idx + 1);
+        next_idx = close + 1;
+    } else {
+        element = pattern.substr(pattern_idx, 1);
     }
+
+    int t = text_idx;
+    // Must match at least once
+    if (!match_here(element, 0, text, t)) return false;
+
+    t += 1; // move forward after first match
+    // Match additional repeats
+    while (t <= text.size()) {
+        if (match_here(pattern, next_idx + 1, text, t)) return true;
+        if (!match_here(element, 0, text, t)) break;
+        t += 1;
+    }
+    return false;
+}
+
 
 // '?' quantifier
 if (pattern_idx+1 < pattern.size() && pattern[pattern_idx+1] == '?') {
-    int next_idx = pattern_idx + 2;
     string element;
+    int next_idx = pattern_idx + 2;
+
     if (pattern[pattern_idx] == '(') {
         int close = pattern.find(')', pattern_idx);
         if (close == -1) return false;
@@ -39,10 +59,11 @@ if (pattern_idx+1 < pattern.size() && pattern[pattern_idx+1] == '?') {
     if (match_here(pattern, next_idx, text, text_idx)) return true;
     // Take
     if (match_here(element, 0, text, text_idx)) {
-        return match_here(pattern, next_idx, text, text_idx + element.size());
+        return match_here(pattern, next_idx, text, text_idx + 1);
     }
     return false;
 }
+
 
 
     // Handle alternation: (cat|dog)
