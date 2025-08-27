@@ -31,6 +31,27 @@ bool match_here(const string& pattern , int pattern_idx,const string& text, int 
         return skip || take;
     }
 
+    // Handle alternation: (cat|dog)
+    if(pattern[pattern_idx] == '('){
+        int close = pattern.find(')' , pattern_idx);
+        if(close == -1)return false;
+
+        string inside = pattern.substr(pattern_idx+1, close-pattern_idx-1);
+
+        int start=0;
+        while(true){
+            int bar = inside.find('|',start);
+            string option = inside.substr(start,(bar == string::npos ? string::npos : bar-start));
+
+            if(match_here(option,0,text, text_idx) && match_here(pattern, close+1, text, text_idx+option.size()))
+            return true;
+
+            if(bar == string::npos)break;
+            start = bar+1;
+        }
+        return false;
+    }
+    
     // Character class [...]
     if (pattern[pattern_idx] == '[') {
         int end = pattern.find(']', pattern_idx);
