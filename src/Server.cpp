@@ -5,7 +5,7 @@
 
 using namespace std;
 
-// These helpers are no longer needed by the new match_pattern function
+// These helpers are used by the new `match_here` function
 bool isDigit(char c){
     return isdigit(c);
 }
@@ -16,7 +16,7 @@ bool isAlpha(char c){
 // Forward declaration for our new recursive helper function
 bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
 
-// This is the new, more powerful matching function that replaces the old one
+// The main entry point for matching
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.empty()) {
         return true;
@@ -35,37 +35,54 @@ bool match_pattern(const string& input_line, const string& pattern) {
     return false;
 }
 
-// This recursive helper function is the new "brain" of the regex engine
+// The recursive helper function with the new logic for `\d` and `\w`
 bool match_here(const string& pattern, int p_idx, const string& text, int t_idx) {
-    // If we've reached the end of the pattern, we've succeeded
     if (p_idx == (int)pattern.length()) {
         return true;
     }
 
-    // Handle '$' anchor: it must match the end of the text
     if (pattern[p_idx] == '$' && p_idx == (int)pattern.length() - 1) {
         return t_idx == (int)text.length();
     }
 
-    // Handle the '+' quantifier with backtracking
     if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '+') {
-        // Enforce the "one" part of "one or more". Must match at least once.
         if (t_idx >= (int)text.length() || (pattern[p_idx] != '.' && pattern[p_idx] != text[t_idx])) {
             return false;
         }
-        // After matching one, it's a choice: either match more of the '+' pattern
-        // OR move on to the rest of the pattern. The recursion handles this choice.
         return match_here(pattern, p_idx, text, t_idx + 1) || match_here(pattern, p_idx + 2, text, t_idx + 1);
     }
 
-    // Handle the '?' quantifier
     if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '?') {
-        // Try two paths: 1) Skip the optional character. 2) Match one character and continue.
         return match_here(pattern, p_idx + 2, text, t_idx) ||
                (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx]) && match_here(pattern, p_idx + 2, text, t_idx + 1));
     }
+    
+    // =================================================================
+    // START OF NEW CODE for `\` character classes
+    // =================================================================
+    if (pattern[p_idx] == '\\' && p_idx + 1 < (int)pattern.length()) {
+        if (t_idx >= (int)text.length()) { // We need a character to match against
+            return false;
+        }
+        char meta_char = pattern[p_idx + 1];
+        bool matches = false;
+        if (meta_char == 'd' && isDigit(text[t_idx])) {
+            matches = true;
+        } else if (meta_char == 'w' && (isalnum(text[t_idx]) || text[t_idx] == '_')) {
+            matches = true;
+        }
 
-    // Handle a standard character match (literal or '.')
+        if (matches) {
+            // If the class matches, advance pattern by 2 and text by 1
+            return match_here(pattern, p_idx + 2, text, t_idx + 1);
+        } else {
+            return false;
+        }
+    }
+    // =================================================================
+    // END OF NEW CODE
+    // =================================================================
+
     if (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx])) {
         return match_here(pattern, p_idx + 1, text, t_idx + 1);
     }
