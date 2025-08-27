@@ -5,101 +5,76 @@
 
 using namespace std;
 
+// These helpers are no longer needed by the new match_pattern function
 bool isDigit(char c){
     return isdigit(c);
 }
-
 bool isAlpha(char c){
     return isalpha(c);
 }
 
+// Forward declaration for our new recursive helper function
+bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
+
+// This is the new, more powerful matching function that replaces the old one
 bool match_pattern(const string& input_line, const string& pattern) {
-    // Simple cases for patterns that are just one token
-    if (pattern.length() == 1 && pattern != ".") {
-        return input_line.find(pattern) != string::npos;
+    if (pattern.empty()) {
+        return true;
     }
-    if (pattern == "\\d") {
-        return input_line.find_first_of("0123456789") != string::npos;
-    }
-    if (pattern == "\\w") {
-        return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos;
-    }
-    if (pattern.size() >= 4 && pattern[0] == '[' && pattern[1] == '^' && pattern[pattern.size() - 1] == ']') {
-        string str = pattern.substr(2, pattern.size() - 3);
-        return (input_line.find_first_not_of(str) != string::npos);
-    }
-    if (pattern.size() >= 3 && pattern[0] == '[' && pattern[pattern.size() - 1] == ']') {
-        string str = pattern.substr(1, pattern.size() - 2);
-        return input_line.find_first_of(str) != string::npos;
+    if (pattern[0] == '^') {
+        // If anchored to the start, only try matching from the beginning
+        return match_here(pattern, 1, input_line, 0);
     }
 
-    // This is the main matching engine for all complex patterns
-    for (int j = 0; j <= (int)input_line.length(); ++j) {
-        string sub = input_line.substr(j);
-        int ptr = 0;
-        bool flag = true;
-
-        for (int i = 0; i < (int)pattern.size(); i++) {
-            char ch = pattern[i];
-
-            if (ptr >= sub.size()) {
-                if (i + 1 < (int)pattern.size() && pattern[i + 1] == '?') {
-                    i++;
-                    continue;
-                }
-                flag = false;
-                break;
-            }
-
-            if (i + 1 < (int)pattern.size() && pattern[i + 1] == '+') {
-                int cnt = 0;
-                while (ptr < sub.size() && (ch == '.' || sub[ptr] == ch)) {
-                    ptr++;
-                    cnt++;
-                }
-                if (i + 2 < (int)pattern.size() && (ch == '.' || pattern[i + 2] == ch)) {
-                    if (cnt > 0) {
-                        ptr--;
-                    }
-                }
-                if (cnt == 0) {
-                    flag = false;
-                    break;
-                }
-                i++;
-            } else if (i + 1 < (int)pattern.size() && pattern[i + 1] == '?') {
-                if (ptr < (int)sub.size() && (ch == '.' || sub[ptr] == ch)) {
-                    ptr++;
-                }
-                i++;
-            } else if (ch == '\\' && i + 1 < pattern.size()) {
-                char meta_char = pattern[i + 1];
-                bool matches = false;
-                if (meta_char == 'd' && isdigit(sub[ptr])) {
-                    matches = true;
-                } else if (meta_char == 'w' && (isalnum(sub[ptr]) || sub[ptr] == '_')) {
-                    matches = true;
-                }
-                if (matches) {
-                    ptr++;
-                    i++;
-                } else {
-                    flag = false;
-                    break;
-                }
-            } else {
-                if (ch != '.' && ch != sub[ptr]) {
-                    flag = false;
-                    break;
-                }
-                ptr++;
-            }
+    // For unanchored patterns, try to match starting at every position
+    for (int i = 0; i <= (int)input_line.length(); ++i) {
+        if (match_here(pattern, 0, input_line, i)) {
+            return true;
         }
-        if (flag) return true;
     }
     return false;
 }
 
+// This recursive helper function is the new "brain" of the regex engine
+bool match_here(const string& pattern, int p_idx, const string& text, int t_idx) {
+    // If we've reached the end of the pattern, we've succeeded
+    if (p_idx == (int)pattern.length()) {
+        return true;
+    }
+
+    // Handle '$' anchor: it must match the end of the text
+    if (pattern[p_idx] == '$' && p_idx == (int)pattern.length() - 1) {
+        return t_idx == (int)text.length();
+    }
+
+    // Handle the '+' quantifier with backtracking
+    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '+') {
+        // Enforce the "one" part of "one or more". Must match at least once.
+        if (t_idx >= (int)text.length() || (pattern[p_idx] != '.' && pattern[p_idx] != text[t_idx])) {
+            return false;
+        }
+        // After matching one, it's a choice: either match more of the '+' pattern
+        // OR move on to the rest of the pattern. The recursion handles this choice.
+        return match_here(pattern, p_idx, text, t_idx + 1) || match_here(pattern, p_idx + 2, text, t_idx + 1);
+    }
+
+    // Handle the '?' quantifier
+    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '?') {
+        // Try two paths: 1) Skip the optional character. 2) Match one character and continue.
+        return match_here(pattern, p_idx + 2, text, t_idx) ||
+               (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx]) && match_here(pattern, p_idx + 2, text, t_idx + 1));
+    }
+
+    // Handle a standard character match (literal or '.')
+    if (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx])) {
+        return match_here(pattern, p_idx + 1, text, t_idx + 1);
+    }
+
+    return false;
+}
+
+
+// Your main function remains unchanged
 int main(int argc, char* argv[]) {
     cout << unitbuf;
     cerr << unitbuf;
