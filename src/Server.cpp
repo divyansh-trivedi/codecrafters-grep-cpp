@@ -41,7 +41,7 @@ bool match_here(const string& pattern , int pattern_idx,const string& text, int 
                                       end - pattern_idx - (neg ? 2 : 1));
 
         bool in_group = (group.find(text[text_idx]) != string::npos);
-        if (neg ^ in_group) return false;
+        if (neg == in_group) return false;
 
         return match_here(pattern, end+1, text, text_idx+1);
     }
