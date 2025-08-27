@@ -22,6 +22,15 @@ bool match_here(const string& pattern , int pattern_idx,const string& text, int 
         return pick || notpick;
     }
 
+      // '?' quantifier
+    if (pattern_idx+1 < pattern.size() && pattern[pattern_idx+1] == '?') {
+        bool skip = match_here(pattern, pattern_idx+2, text, text_idx);
+        bool take = (text_idx < text.size() &&
+                    (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx])) &&
+                    match_here(pattern, pattern_idx+2, text, text_idx+1);
+        return skip || take;
+    }
+
     // Character class [...]
     if (pattern[pattern_idx] == '[') {
         int end = pattern.find(']', pattern_idx);
