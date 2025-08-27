@@ -1,112 +1,100 @@
 #include <iostream>
 #include <string>
 #include <cctype>
+#include <stdexcept>
 
 using namespace std;
 
-// Recursive matcher
-bool match_pattern(const string& input, const string& pattern, bool start_of_line = true);
+// The main recursive matcher. No longer needs the 'start_of_line' flag.
+bool match_pattern(const string& input, const string& pattern);
 
-// Helper to handle groups with quantifiers
-bool match_group_pattern(const string& input, const string& group, const string& rest_pattern) {
-    size_t i = 0;
-    while (true) {
-        // Try to match the group at current position
-        if (!match_pattern(input.substr(i), group, true)) break;
-
-        // Move past the matched group
-        size_t group_len = 0;
-        while (group_len < group.size() && group[group_len] != '+'
-               && group[group_len] != '?') group_len++;
-
-        i += group_len;
-
-        // If rest_pattern is empty, any repetition is fine
-        if (rest_pattern.empty()) return true;
-
-        // Check rest of pattern
-        if (match_pattern(input.substr(i), rest_pattern, false)) return true;
-
-        // If group does not have + quantifier, stop after first match
-        if (group_len < group.size() && group[group_len] != '+') break;
-    }
-    return false;
-}
-
-// Main recursive matcher
-bool match_pattern(const string& input, const string& pattern, bool start_of_line) {
+// Your main recursive function, now simplified
+bool match_pattern(const string& input, const string& pattern) {
     if (pattern.empty()) return true;
-    if (pattern[0] == '$') return input.empty();
-    if (input.empty()) return false;
+    if (pattern[0] == '$' && pattern.length() == 1) return input.empty();
+    if (input.empty() && pattern != "$") return false;
 
-    // ^ anchor
-    if (!pattern.empty() && pattern[0] == '^') 
-        return match_pattern(input, pattern.substr(1), true);
-
-    // Handle groups ( ... )
+    // Handle groups ( ... ) with alternation
     if (pattern[0] == '(') {
         size_t close = pattern.find(')');
+        if (close == string::npos) return false; // Malformed group
+
         string group = pattern.substr(1, close - 1);
         string rest = pattern.substr(close + 1);
-
-        // Check if group has quantifier + or ?
-        if (!rest.empty() && rest[0] == '+') {
-            return match_group_pattern(input, group, rest.substr(1));
-        } else if (!rest.empty() && rest[0] == '?') {
-            return match_group_pattern(input, group, rest.substr(1)) || match_pattern(input, rest.substr(1), false);
+        
+        // =================================================================
+        // START OF CHANGE: Added Alternation `|` Logic
+        // =================================================================
+        size_t pipe_pos = group.find('|');
+        if (pipe_pos != string::npos) {
+            string alt_A = group.substr(0, pipe_pos);
+            string alt_B = group.substr(pipe_pos + 1);
+            
+            // Try to match (alternative A followed by the rest) OR (alternative B followed by the rest)
+            return match_pattern(input, alt_A + rest) || match_pattern(input, alt_B + rest);
         } else {
-            return match_pattern(input, group, true) && match_pattern(input.substr(group.size()), rest, false);
+            // It's a simple group without alternation, just concatenate
+            return match_pattern(input, group + rest);
         }
+        // =================================================================
+        // END OF CHANGE
+        // =================================================================
     }
 
     // \d for digits
-    if (pattern.size() >= 2 && pattern.substr(0,2) == "\\d") {
+    if (pattern.size() >= 2 && pattern.substr(0, 2) == "\\d") {
         if (!input.empty() && isdigit(input[0])) 
-            return match_pattern(input.substr(1), pattern.substr(2), false);
+            return match_pattern(input.substr(1), pattern.substr(2));
         return false;
     }
 
     // \w for alphanumeric
-    if (pattern.size() >= 2 && pattern.substr(0,2) == "\\w") {
-        if (!input.empty() && isalnum(input[0]))
-            return match_pattern(input.substr(1), pattern.substr(2), false);
+    if (pattern.size() >= 2 && pattern.substr(0, 2) == "\\w") {
+        if (!input.empty() && (isalnum(input[0]) || input[0] == '_'))
+            return match_pattern(input.substr(1), pattern.substr(2));
         return false;
     }
 
     // Wildcard .
-    if (pattern[0] == '.') return match_pattern(input.substr(1), pattern.substr(1), false);
-
+    if (pattern[0] == '.') {
+        if (!input.empty())
+            return match_pattern(input.substr(1), pattern.substr(1));
+        return false;
+    }
+    
     // Character classes [...]
     if (pattern[0] == '[') {
         size_t close = pattern.find(']');
+        if (close == string::npos) return false; // Malformed
+        
         bool neg = pattern[1] == '^';
-        string chars = neg ? pattern.substr(2, close-2) : pattern.substr(1, close-1);
-        bool match = chars.find(input[0]) != string::npos;
+        string chars = neg ? pattern.substr(2, close - 2) : pattern.substr(1, close - 1);
+        bool match = !input.empty() && (chars.find(input[0]) != string::npos);
         if (neg) match = !match;
-        if (match) return match_pattern(input.substr(1), pattern.substr(close+1), false);
+        
+        if (match) 
+            return match_pattern(input.substr(1), pattern.substr(close + 1));
         return false;
     }
-
+    
     // Literal match with quantifiers
     if (pattern.size() > 1 && pattern[1] == '+') {
-        size_t i = 0;
-        while (i < input.size() && input[i] == pattern[0]) i++;
-        return i > 0 && match_pattern(input.substr(i), pattern.substr(2), false);
+        // Must match at least one
+        if (input.empty() || input[0] != pattern[0]) return false;
+        // After one match, it's a choice: match more OR match the rest of the pattern
+        return match_pattern(input.substr(1), pattern) || match_pattern(input.substr(1), pattern.substr(2));
     }
-
     if (pattern.size() > 1 && pattern[1] == '?') {
-        if (input[0] == pattern[0])
-            return match_pattern(input.substr(1), pattern.substr(2), false) || match_pattern(input, pattern.substr(2), false);
-        else
-            return match_pattern(input, pattern.substr(2), false);
+        // Choice: match zero OR match one
+        return match_pattern(input, pattern.substr(2)) ||
+               (!input.empty() && input[0] == pattern[0] && match_pattern(input.substr(1), pattern.substr(2)));
     }
 
-    // Literal match
-    if (input[0] == pattern[0]) return match_pattern(input.substr(1), pattern.substr(1), false);
+    // Standard Literal match
+    if (!input.empty() && input[0] == pattern[0]) 
+        return match_pattern(input.substr(1), pattern.substr(1));
 
-    // If pattern can start anywhere
-    if (start_of_line) return false;
-    return match_pattern(input.substr(1), pattern, false);
+    return false;
 }
 
 int main(int argc, char* argv[]) {
@@ -129,6 +117,28 @@ int main(int argc, char* argv[]) {
     string input_line;
     getline(cin, input_line);
 
-    bool result = match_pattern(input_line, pattern);
-    return result ? 0 : 1;
+    // =================================================================
+    // START OF CHANGE: Main logic to handle unanchored searches
+    // =================================================================
+    if (pattern[0] == '^') {
+        if (match_pattern(input_line, pattern.substr(1))) {
+            return 0;
+        }
+    } else {
+        // For unanchored patterns, we loop and try to match at every position
+        for (size_t i = 0; i < input_line.length(); ++i) {
+            if (match_pattern(input_line.substr(i), pattern)) {
+                return 0;
+            }
+        }
+        // Special case for empty pattern matching empty string
+        if (pattern.empty() && input_line.empty()) {
+            return 0;
+        }
+    }
+    // =================================================================
+    // END OF CHANGE
+    // =================================================================
+
+    return 1; // Return 1 if no match was found
 }
