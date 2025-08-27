@@ -4,78 +4,117 @@
 
 using namespace std;
 
-// Returns number of characters matched, -1 if no match
-int match_pattern_len(const string& input, const string& pattern, bool start_of_line = true);
+// Recursive matcher
+bool match_pattern(const string& input, const string& pattern, bool start_of_line = true);
 
-// Handle alternation (returns matched length)
-int match_alternation_len(const string& input, const string& group) {
-    size_t pipe = group.find('|');
-    if (pipe == string::npos) {
-        return match_pattern_len(input, group, true);
+// Helper to handle groups with quantifiers
+bool match_group_pattern(const string& input, const string& group, const string& rest_pattern) {
+    size_t i = 0;
+    while (true) {
+        // Try to match the group at current position
+        if (!match_pattern(input.substr(i), group, true)) break;
+
+        // Move past the matched group
+        size_t group_len = 0;
+        while (group_len < group.size() && group[group_len] != '+'
+               && group[group_len] != '?') group_len++;
+
+        i += group_len;
+
+        // If rest_pattern is empty, any repetition is fine
+        if (rest_pattern.empty()) return true;
+
+        // Check rest of pattern
+        if (match_pattern(input.substr(i), rest_pattern, false)) return true;
+
+        // If group does not have + quantifier, stop after first match
+        if (group_len < group.size() && group[group_len] != '+') break;
     }
-
-    string left = group.substr(0, pipe);
-    string right = group.substr(pipe + 1);
-
-    int len = match_pattern_len(input, left, true);
-    if (len >= 0) return len;
-
-    return match_pattern_len(input, right, true);
+    return false;
 }
 
-int match_pattern_len(const string& input, const string& pattern, bool start_of_line) {
-    if (pattern.empty()) return 0;
-    if (pattern[0] == '$') return input.empty() ? 0 : -1;
-    if (input.empty()) return -1;
+// Main recursive matcher
+bool match_pattern(const string& input, const string& pattern, bool start_of_line) {
+    if (pattern.empty()) return true;
+    if (pattern[0] == '$') return input.empty();
+    if (input.empty()) return false;
 
     // ^ anchor
-    if (pattern[0] == '^') return match_pattern_len(input, pattern.substr(1), true);
+    if (!pattern.empty() && pattern[0] == '^') 
+        return match_pattern(input, pattern.substr(1), true);
 
-    // Group with alternation
+    // Handle groups ( ... )
     if (pattern[0] == '(') {
         size_t close = pattern.find(')');
-        if (close == string::npos) return -1; // malformed pattern
         string group = pattern.substr(1, close - 1);
         string rest = pattern.substr(close + 1);
 
-        int len = match_alternation_len(input, group);
-        if (len < 0) return -1;
-        int rest_len = match_pattern_len(input.substr(len), rest, false);
-        if (rest_len < 0) return -1;
-        return len + rest_len;
+        // Check if group has quantifier + or ?
+        if (!rest.empty() && rest[0] == '+') {
+            return match_group_pattern(input, group, rest.substr(1));
+        } else if (!rest.empty() && rest[0] == '?') {
+            return match_group_pattern(input, group, rest.substr(1)) || match_pattern(input, rest.substr(1), false);
+        } else {
+            return match_pattern(input, group, true) && match_pattern(input.substr(group.size()), rest, false);
+        }
     }
 
-    // \d
+    // \d for digits
     if (pattern.size() >= 2 && pattern.substr(0,2) == "\\d") {
-        if (isdigit(input[0])) return 1 + match_pattern_len(input.substr(1), pattern.substr(2), false);
-        return -1;
+        if (!input.empty() && isdigit(input[0])) 
+            return match_pattern(input.substr(1), pattern.substr(2), false);
+        return false;
     }
 
-    // \w
+    // \w for alphanumeric
     if (pattern.size() >= 2 && pattern.substr(0,2) == "\\w") {
-        if (isalnum(input[0])) return 1 + match_pattern_len(input.substr(1), pattern.substr(2), false);
-        return -1;
+        if (!input.empty() && isalnum(input[0]))
+            return match_pattern(input.substr(1), pattern.substr(2), false);
+        return false;
     }
 
-    // .
-    if (pattern[0] == '.') return 1 + match_pattern_len(input.substr(1), pattern.substr(1), false);
+    // Wildcard .
+    if (pattern[0] == '.') return match_pattern(input.substr(1), pattern.substr(1), false);
 
-    // Literal
-    if (input[0] == pattern[0]) return 1 + match_pattern_len(input.substr(1), pattern.substr(1), false);
+    // Character classes [...]
+    if (pattern[0] == '[') {
+        size_t close = pattern.find(']');
+        bool neg = pattern[1] == '^';
+        string chars = neg ? pattern.substr(2, close-2) : pattern.substr(1, close-1);
+        bool match = chars.find(input[0]) != string::npos;
+        if (neg) match = !match;
+        if (match) return match_pattern(input.substr(1), pattern.substr(close+1), false);
+        return false;
+    }
 
-    // If can start anywhere
-    if (start_of_line) return -1;
-    int skip_len = match_pattern_len(input.substr(1), pattern, false);
-    if (skip_len < 0) return -1;
-    return 1 + skip_len;
+    // Literal match with quantifiers
+    if (pattern.size() > 1 && pattern[1] == '+') {
+        size_t i = 0;
+        while (i < input.size() && input[i] == pattern[0]) i++;
+        return i > 0 && match_pattern(input.substr(i), pattern.substr(2), false);
+    }
+
+    if (pattern.size() > 1 && pattern[1] == '?') {
+        if (input[0] == pattern[0])
+            return match_pattern(input.substr(1), pattern.substr(2), false) || match_pattern(input, pattern.substr(2), false);
+        else
+            return match_pattern(input, pattern.substr(2), false);
+    }
+
+    // Literal match
+    if (input[0] == pattern[0]) return match_pattern(input.substr(1), pattern.substr(1), false);
+
+    // If pattern can start anywhere
+    if (start_of_line) return false;
+    return match_pattern(input.substr(1), pattern, false);
 }
 
 int main(int argc, char* argv[]) {
-    cout << unitbuf;
-    cerr << unitbuf;
+    cout << std::unitbuf;
+    cerr << std::unitbuf;
 
     if (argc != 3) {
-        cerr << "Expected two arguments\n";
+        cerr << "Expected two arguments" << endl;
         return 1;
     }
 
@@ -83,13 +122,13 @@ int main(int argc, char* argv[]) {
     string pattern = argv[2];
 
     if (flag != "-E") {
-        cerr << "Expected first argument to be '-E'\n";
+        cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
 
     string input_line;
     getline(cin, input_line);
 
-    int matched_len = match_pattern_len(input_line, pattern, true);
-    return matched_len >= 0 ? 0 : 1;
+    bool result = match_pattern(input_line, pattern);
+    return result ? 0 : 1;
 }
