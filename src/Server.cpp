@@ -1,153 +1,144 @@
 #include <iostream>
 #include <string>
+#include <stdexcept>
 #include <cctype>
-#include <vector>
 
 using namespace std;
 
-// Forward declaration
-bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
+bool match_here(const string& pattern , int pattern_idx,const string& text, int text_idx){
+    if (pattern_idx == pattern.size()) return true; // Matched
 
-// Match single character or group element
-bool match_element(const string& pattern, int& p_idx, const string& text, int t_idx) {
-    if (p_idx >= pattern.size() || t_idx >= text.size()) return false;
+    if (pattern[pattern_idx] == '$' && pattern_idx == pattern.size()-1)
+        return text_idx == text.size();
 
-    char c = pattern[p_idx];
+    // '+' quantifier
+    if (pattern_idx+1 < pattern.size() && pattern[pattern_idx+1] == '+') {
+        if (text_idx >= text.size() || 
+            (pattern[pattern_idx] != '.' && pattern[pattern_idx] != text[text_idx]))
+            return false;
 
-    // Escaped classes \d, \w
-    if (c == '\\' && p_idx + 1 < pattern.size()) {
-        char next = pattern[p_idx + 1];
-        if (next == 'd' && isdigit(text[t_idx])) { p_idx += 2; return true; }
-        if (next == 'w' && (isalnum(text[t_idx]) || text[t_idx] == '_')) { p_idx += 2; return true; }
-        return false;
+        bool notpick = match_here(pattern , pattern_idx+2, text , text_idx+1);
+        bool pick    = match_here(pattern , pattern_idx, text , text_idx+1);
+        return pick || notpick;
     }
 
-    // Character class [ ... ]
-    if (c == '[') {
-        int end = pattern.find(']', p_idx);
-        if (end == string::npos) return false;
-
-        bool neg = (pattern[p_idx + 1] == '^');
-        int start = p_idx + (neg ? 2 : 1);
-        string group = pattern.substr(start, end - start);
-
-        bool found = group.find(text[t_idx]) != string::npos;
-        p_idx = end + 1;
-        return neg ? !found : found;
+// '?' quantifier
+if (pattern_idx+1 < pattern.size() && pattern[pattern_idx+1] == '?') {
+    int next_idx = pattern_idx + 2;
+    string element;
+    if (pattern[pattern_idx] == '(') {
+        int close = pattern.find(')', pattern_idx);
+        if (close == -1) return false;
+        element = pattern.substr(pattern_idx, close - pattern_idx + 1);
+        next_idx = close + 1;
+    } else {
+        element = pattern.substr(pattern_idx, 1);
     }
 
-    // Single char or .
-    p_idx++;
-    return (c == '.' || c == text[t_idx]);
-}
-
-// Recursive quantifier matcher
-bool match_quantifier(const string& pattern, int& p_idx, const string& text, int t_idx, char quant = '+') {
-    int start_idx = t_idx;
-    int prev_p = p_idx;
-
-    if (quant == '+') {
-        // Must match at least once
-        if (!match_here(pattern, prev_p, text, t_idx)) return false;
-        t_idx++;
+    // Skip
+    if (match_here(pattern, next_idx, text, text_idx)) return true;
+    // Take
+    if (match_here(element, 0, text, text_idx)) {
+        return match_here(pattern, next_idx, text, text_idx + element.size());
     }
-
-    while (t_idx <= text.size()) {
-        if (match_here(pattern, p_idx, text, t_idx)) return true;
-        if (t_idx >= text.size()) break;
-        t_idx++;
-    }
-
     return false;
 }
 
-// Core recursive matcher
-bool match_here(const string& pattern, int p_idx, const string& text, int t_idx) {
-    if (p_idx == pattern.size()) return t_idx == text.size();
 
-    // Anchors
-    if (pattern[p_idx] == '^') return match_here(pattern, p_idx + 1, text, t_idx == 0 ? 0 : t_idx);
+    // Handle alternation: (cat|dog)
+    if(pattern[pattern_idx] == '('){
+        int close = pattern.find(')' , pattern_idx);
+        if(close == -1)return false;
 
-    if (pattern[p_idx] == '$' && p_idx == pattern.size() - 1) return t_idx == text.size();
+        string inside = pattern.substr(pattern_idx+1, close-pattern_idx-1);
 
-    // Grouping with alternation
-    if (pattern[p_idx] == '(') {
-        int close = pattern.find(')', p_idx);
-        if (close == string::npos) return false;
+        int start=0;
+        while(true){
+            int bar = inside.find('|',start);
+            string option = inside.substr(start,(bar == string::npos ? string::npos : bar-start));
 
-        string inside = pattern.substr(p_idx + 1, close - p_idx - 1);
+            if(match_here(option,0,text, text_idx) && match_here(pattern, close+1, text, text_idx+option.size()))
+            return true;
 
-        // Split by |
-        vector<string> options;
-        size_t start = 0;
-        while (true) {
-            size_t bar = inside.find('|', start);
-            options.push_back(inside.substr(start, bar == string::npos ? string::npos : bar - start));
-            if (bar == string::npos) break;
-            start = bar + 1;
-        }
-
-        for (auto& opt : options) {
-            if (match_here(opt, 0, text, t_idx) && match_here(pattern, close + 1, text, t_idx + opt.size()))
-                return true;
+            if(bar == string::npos)break;
+            start = bar+1;
         }
         return false;
     }
+    
+    // Character class [...]
+    if (pattern[pattern_idx] == '[') {
+        int end = pattern.find(']', pattern_idx);
+        if (end == -1 || text_idx >= text.size()) return false;
 
-    // Quantifiers: +, *, ?
-    if (p_idx + 1 < pattern.size()) {
-        char q = pattern[p_idx + 1];
-        if (q == '+') {
-            int saved = p_idx;
-            return match_quantifier(pattern, p_idx, text, t_idx, '+');
-        }
-        if (q == '?') {
-            int saved = p_idx;
-            // Skip
-            if (match_here(pattern, p_idx + 2, text, t_idx)) return true;
-            // Take
-            if (t_idx < text.size() && match_element(pattern, p_idx, text, t_idx))
-                return match_here(pattern, p_idx, text, t_idx + 1);
-            return false;
-        }
-        if (q == '*') {
-            int saved = p_idx;
-            while (t_idx <= text.size()) {
-                if (match_here(pattern, p_idx + 2, text, t_idx)) return true;
-                if (t_idx >= text.size()) break;
-                if (!match_element(pattern, p_idx, text, t_idx)) break;
-                t_idx++;
-            }
-            p_idx += 2;
-            return false;
-        }
+        bool neg = (pattern[pattern_idx+1] == '^');
+        string group = pattern.substr(pattern_idx + (neg ? 2 : 1), 
+                                      end - pattern_idx - (neg ? 2 : 1));
+
+        bool in_group = (group.find(text[text_idx]) != string::npos);
+        if (neg == in_group) return false;
+
+        return match_here(pattern, end+1, text, text_idx+1);
     }
 
-    // Normal match
-    if (t_idx < text.size() && match_element(pattern, p_idx, text, t_idx))
-        return match_here(pattern, p_idx, text, t_idx + 1);
+    // Escaped meta chars \d, \w
+    if (pattern[pattern_idx] == '\\' && pattern_idx+1 < pattern.size()) {
+        if (text_idx >= text.size()) return false;
 
-    return false;
+        char m = pattern[pattern_idx+1];
+        bool flag = (m == 'd' && isdigit(text[text_idx])) ||
+                    (m == 'w' && (isalnum(text[text_idx]) || 
+                                  text[text_idx] == '_'));
+
+        if (!flag) return false;
+        return match_here(pattern, pattern_idx+2, text, text_idx+1);
+    }
+
+    // Normal char or '.'
+    if (text_idx < text.size() && 
+        (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx]))
+        return match_here(pattern, pattern_idx+1, text, text_idx+1);
+
+    return false; 
 }
 
-// Entry function
-bool match_pattern(const string& text, const string& pattern) {
+bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.empty()) return true;
-    if (pattern[0] == '^') return match_here(pattern, 1, text, 0);
 
-    for (int i = 0; i <= (int)text.size(); i++)
-        if (match_here(pattern, 0, text, i)) return true;
+    if (pattern[0] == '^')
+        return match_here(pattern, 1, input_line, 0);
 
+    for (int i=0; i <= (int)input_line.size(); i++) {
+        if (match_here(pattern, 0, input_line, i)) return true;
+    }
     return false;
 }
 
-// Main
-int main() {
-    string text;
-    string pattern;
-    getline(cin, text);
-    getline(cin, pattern);
+int main(int argc, char* argv[]) {
+    cout << unitbuf;
+    cerr << unitbuf;
 
-    if (match_pattern(text, pattern)) return 0;
-    else return 1;
+    if (argc != 3) {
+        cerr << "Expected two arguments" << endl;
+        return 1;
+    }
+
+    string flag = argv[1];
+    string pattern = argv[2];
+
+    if (flag != "-E") {
+        cerr << "Expected first argument to be '-E'" << endl;
+        return 1;
+    }
+
+    string input_line;
+    getline(cin, input_line);
+
+    try {
+        if (match_pattern(input_line, pattern)) return 0;
+        else return 1;
+    } catch (const runtime_error& e) {
+        cerr << e.what() << endl;
+        return 1;
+    }
 }
