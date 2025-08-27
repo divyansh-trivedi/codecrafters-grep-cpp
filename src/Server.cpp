@@ -17,7 +17,7 @@ bool match_here(const string& pattern , int pattern_idx,const string& text, int 
     if(pattern[pattern_idx] == '$' && pattern_idx == pattern.size()-1)// if $ at the end it only matches when text index at end
         return text_idx == text.size();
 
-    if(idx+1 < pattern.size() && patten[pattern_idx+1] == '+'){// For '+' quantifier
+    if(idx+1 < pattern.size() && pattern[pattern_idx+1] == '+'){// For '+' quantifier
         if(text_idx >= text.size() || (pattern[pattern_idx] != '.'&& pattern[pattern_idx] != text[text_idx]))
         return false; //  Match 1 time , if one dont match then false for sureee.
         
@@ -27,17 +27,17 @@ bool match_here(const string& pattern , int pattern_idx,const string& text, int 
     }
     
     if(pattern[pattern_idx] == '['){ //  For -> [...] or [^...]
-        int end = pattern.dinf('[',pattern_idx)return false;
+        int end = pattern.find('[',pattern_idx)return false;
 
         if(end == -1 || text_idx >= text.size())return false;
 
         bool neg = (pattern[pattern_idx+1] == '^');// check if negated group like[^abc]
         string group = pattern.substr(pattern_idx + (neg ? 2:1), end-pattern_idx-(neg)?2:1);// extract the group (skip '^' if negated)
 
-        bool temp = (group.find(text[text_idx]) != string:npos);// chech if current character in the group
+        bool temp = (group.find(text[text_idx]) != string::npos);// chech if current character in the group
 
         // xor for  -: 1) Group is negated -> must not be in group | 2) Group is normal must be in group
-        if(neg ^ temp )
+        if(neg == temp )
         return false;
 
         return match_here(pattern, end+1, text, text_idx+1);//move past ']' in pattern and current char in text
@@ -48,7 +48,7 @@ bool match_here(const string& pattern , int pattern_idx,const string& text, int 
 
         char m = pattern[pattern_idx+1]; // character after '\'
         bool flag = (m == 'd' && isDigit(text[text_idx])) || (text[text_idx] == '_')
-                    || (m == 'w' && isAlpha(text[text_idx])&& isDigit(text[text_idx]));
+                    || (m == 'w' && isAlpha(text[text_idx]) || isDigit(text[text_idx]));
 
         if(!flag)return false;// not matched
         return match_here(pattern, pattern_idx+2, text, text_idx+1);// consume both '\' + meta
