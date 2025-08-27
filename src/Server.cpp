@@ -13,8 +13,8 @@ bool isAlpha(char c){
     return isalpha(c);
 }
 
-// Forward declaration for our new recursive helper function
-bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
+// // Forward declaration for our new recursive helper function
+// bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
 
 // This is the new, more powerful matching function that replaces the old one
 bool match_pattern(const string& input_line, const string& pattern) {
