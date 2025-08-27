@@ -4,115 +4,138 @@
 #include <cctype>
 
 using namespace std;
-
-// These helpers are used by the new `match_here` function
-bool isDigit(char c){
-    return isdigit(c);
+bool  isDigit(char c){
+    return c>='0' && c<='9';
 }
-bool isAlpha(char c){
-    return isalpha(c);
+bool  isAlpha(char c){
+    return isalpha(c); // Use the standard library function for robustness
 }
-
-// Forward declaration for our recursive helper function
-bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
-
-// The main entry point for matching
 bool match_pattern(const string& input_line, const string& pattern) {
-    if (pattern.empty()) {
+    // These simple handlers are good for performance but are limited.
+    // The main engine below is what handles complex, combined patterns.
+    if (pattern.length() == 1) {
+        return input_line.find(pattern) != string::npos;
+    }
+    else if (pattern == "\\d") {
+        return input_line.find_first_of("0123456789") != string::npos;
+    }
+    else if(pattern == "\\w"){
+        return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos;
+    }
+    else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
+        string str = pattern.substr(2,pattern.size()-3);
+        return (input_line.find_first_not_of(str) != string::npos);
+    }
+    else if(pattern.size() >= 3 && pattern[0] == '[' && pattern[pattern.size()-1]== ']'){
+        string str = pattern.substr(1,pattern.size()-2);
+        return input_line.find_first_of(str) != string::npos;
+    }
+    else if(pattern[pattern.size()-1] == '$' ){
+        string temp = pattern.substr(0, pattern.size()-1);
+        if(pattern[0] == '^')
+            temp = pattern.substr(1, pattern.size()-2);
+        if(input_line.size() < temp.size()) return false;
+        int start = input_line.size() - temp.size();
+        for(size_t i = 0; i < temp.size(); i++){
+            if(input_line[start + i] != temp[i]) return false;
+        }
         return true;
     }
-    if (pattern[0] == '^') {
-        // If anchored to the start, only try matching from the beginning
-        return match_here(pattern, 1, input_line, 0);
+    else if(pattern[0] == '^'){
+        // This simple logic is flawed for complex patterns, so we rely on the main engine
     }
 
-    // For unanchored patterns, try to match starting at every position
-    for (int i = 0; i <= (int)input_line.length(); ++i) {
-        if (match_here(pattern, 0, input_line, i)) {
-            return true;
-        }
-    }
-    return false;
-}
+    // Main matching engine for complex patterns
+    for(int j=0; j<=(int)input_line.length(); j++){
+        string sub = input_line.substr(j);
+        int ptr = 0;
+        bool flag = true;
 
-// The recursive helper function with new logic for `[...]` and `[^...]`
-bool match_here(const string& pattern, int p_idx, const string& text, int t_idx) {
-    if (p_idx == (int)pattern.length()) {
-        return true;
-    }
+        for(int i=0; i<(int)pattern.size(); i++){
+            char ch =  pattern[i];
 
-    if (pattern[p_idx] == '$' && p_idx == (int)pattern.length() - 1) {
-        return t_idx == (int)text.length();
-    }
-
-    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '+') {
-        if (t_idx >= (int)text.length() || (pattern[p_idx] != '.' && pattern[p_idx] != text[t_idx])) {
-            return false;
-        }
-        return match_here(pattern, p_idx, text, t_idx + 1) || match_here(pattern, p_idx + 2, text, t_idx + 1);
-    }
-
-    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '?') {
-        return match_here(pattern, p_idx + 2, text, t_idx) ||
-               (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx]) && match_here(pattern, p_idx + 2, text, t_idx + 1));
-    }
-    
-    // =================================================================
-    // START OF NEW CODE for `[` character groups
-    // =================================================================
-    if (pattern[p_idx] == '[') {
-        size_t end_bracket_pos = pattern.find(']', p_idx);
-        if (end_bracket_pos != string::npos) {
-            if (t_idx >= (int)text.length()) {
-                return false;
+            if(ptr >= (int)sub.size()){
+                flag = false;
+                break;
             }
-            
-            bool is_negated = (pattern[p_idx + 1] == '^');
-            int start_char_pos = is_negated ? p_idx + 2 : p_idx + 1;
-            string char_group = pattern.substr(start_char_pos, end_bracket_pos - start_char_pos);
-            
-            bool found_in_group = (char_group.find(text[t_idx]) != string::npos);
+            if(i+1 < (int)pattern.size() && pattern[i+1]  == '+'){
+                int cnt =0;
+                while (ptr<(int)sub.size()  && (sub[ptr] == ch || ch == '.')) {
+                    ptr++;
+                    cnt++;
+                }
+                if(i+2 < (int)pattern.size() && (pattern[i+2] == ch || ch == '.')){
+                    if(cnt > 0){
+                        ptr--;
+                    }
+                }
+                if(cnt == 0){
+                    flag = false;
+                    break;
+                }
+                i++;
+            } else if (i+1 < (int)pattern.size() && pattern[i+1] == '?') {
+                if (ptr < (int)sub.size() && (ch == '.' || sub[ptr] == ch)) {
+                    ptr++;
+                }
+                i++;
+            }
+            // =================================================================
+            // START OF MINIMAL CHANGE
+            // This new block teaches the main engine how to handle character groups.
+            // =================================================================
+            else if (ch == '[') {
+                size_t end_bracket_pos = pattern.find(']', i);
+                if (end_bracket_pos == string::npos) { // Malformed pattern
+                    flag = false;
+                    break;
+                }
+                
+                bool is_negated = (pattern[i + 1] == '^');
+                int start_char_pos = is_negated ? i + 2 : i + 1;
+                string char_group = pattern.substr(start_char_pos, end_bracket_pos - start_char_pos);
+                
+                bool found_in_group = (char_group.find(sub[ptr]) != string::npos);
 
-            // A match occurs if (it's NOT negated AND it's found) OR (it IS negated AND it's NOT found)
-            // This can be simplified to: is_negated != found_in_group
-            if (is_negated != found_in_group) {
-                return match_here(pattern, end_bracket_pos + 1, text, t_idx + 1);
+                if (is_negated == found_in_group) { // If negated and found, or not negated and not found, it's a failure.
+                    flag = false;
+                    break;
+                }
+
+                ptr++; // Consume one character from input
+                i = end_bracket_pos; // Jump the pattern index past the entire [...] group
+            }
+            // =================================================================
+            // END OF MINIMAL CHANGE
+            // =================================================================
+            else if(ch == '\\' && i+1 < (int)pattern.size()){
+                char meta_char = pattern[i+1];
+                bool matches = false;
+                if(meta_char == 'd' && isDigit(sub[ptr])){
+                    matches = true;
+                } else if(meta_char == 'w' && (isAlpha(sub[ptr])  || isDigit(sub[ptr]) || sub[ptr] == '_')){ // Corrected this line
+                    matches = true;
+                }
+                if(matches){
+                    ptr++;
+                    i++;
+                } else {
+                    flag = false;
+                    break;
+                }
             } else {
-                return false;
+                if(ch != '.' && ch != sub[ptr]){
+                    flag = false;
+                    break;
+                }
+                ptr++;
             }
         }
+        if(flag) return true;
     }
-    // =================================================================
-    // END OF NEW CODE
-    // =================================================================
-
-    if (pattern[p_idx] == '\\' && p_idx + 1 < (int)pattern.length()) {
-        if (t_idx >= (int)text.length()) {
-            return false;
-        }
-        char meta_char = pattern[p_idx + 1];
-        bool matches = false;
-        if (meta_char == 'd' && isDigit(text[t_idx])) {
-            matches = true;
-        } else if (meta_char == 'w' && (isalnum(text[t_idx]) || text[t_idx] == '_')) {
-            matches = true;
-        }
-
-        if (matches) {
-            return match_here(pattern, p_idx + 2, text, t_idx + 1);
-        } else {
-            return false;
-        }
-    }
-
-    if (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx])) {
-        return match_here(pattern, p_idx + 1, text, t_idx + 1);
-    }
-
     return false;
 }
 
-// Your main function remains unchanged
 int main(int argc, char* argv[]) {
     cout << unitbuf;
     cerr << unitbuf;
