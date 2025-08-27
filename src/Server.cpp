@@ -1,86 +1,140 @@
 #include <iostream>
 #include <string>
-#include <stdexcept>
-#include <cctype>
 
 using namespace std;
-
-// These helpers can be kept for other potential uses or removed
-bool isDigit(char c){
-    return isdigit(c);
+bool  isDigit(char c){
+    return c>='0' && c<='9';
 }
-
-bool isAlpha(char c){
-    return isalpha(c);
+bool  isAlpha(char c){
+    return c>='a' && c<='z';
 }
-
-// Forward declaration for our recursive helper function
-bool match_here(const string& pattern, int p_idx, const string& text, int t_idx);
-
-// The main entry point for matching
 bool match_pattern(const string& input_line, const string& pattern) {
-    if (pattern[0] == '^') {
-        return match_here(pattern, 1, input_line, 0);
+    if (pattern.length() == 1) {
+        if (pattern[0] == '.') return !input_line.empty(); // '.' should match any single char, so any non-empty string has a match
+        return input_line.find(pattern) != string::npos;
     }
+    else if (pattern == "\\d") {
+        // Match any digit character in input_line
+        return input_line.find_first_of("0123456789") != string::npos;
+    }
+    else if(pattern == "\\w"){
+        return input_line.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos;
+    }
+    else if(pattern.size() >=4 && pattern[0] == '['  && pattern[1] == '^'&& pattern[pattern.size()-1] == ']'){
+        string str = pattern.substr(2,pattern.size()-3); // substr(position , count)
+        return (input_line.find_first_not_of(str) != string::npos);
+    }
+    else if(pattern.size() >= 3 && pattern[0] == '[' && pattern[pattern.size()-1]== ']'){
+        string str = pattern.substr(1,pattern.size()-2);
+        return input_line.find_first_of(str) != string::npos;
+    }
+    else if(pattern.size() > 1 && pattern[pattern.size()-1] == '$' ){ // for eg pinapple123 is not pinapple$ because it should end with ple not 123
+        string temp = pattern.substr(0, pattern.size()-1);
 
-    // For unanchored patterns, try to match starting at every position
-    for (int i = 0; i <= (int)input_line.length(); ++i) {
-        if (match_here(pattern, 0, input_line, i)) {
-            return true;
+        if(pattern[0] == '^')
+            temp = pattern.substr(1, pattern.size()-2);
+
+         if(input_line.size() < temp.size()) return false;
+         
+         // If both ^ and $ are present, it must be an exact match
+         if (pattern[0] == '^' && input_line.size() != temp.size()) return false;
+
+        int start = input_line.size() - temp.size(); // start comparing from end
+        for(int i = 0; i < temp.size(); i++){
+            // MODIFIED LINE 1
+            if(temp[i] != '.' && input_line[start + i] != temp[i]) return false;
         }
-    }
-    return false;
-}
-
-// The recursive helper function with the corrected '+' logic
-bool match_here(const string& pattern, int p_idx, const string& text, int t_idx) {
-    if (p_idx == (int)pattern.length()) {
         return true;
     }
 
-    if (pattern[p_idx] == '$' && p_idx == (int)pattern.length() - 1) {
-        return t_idx == (int)text.length();
-    }
-
-    // =================================================================
-    // START OF CORRECTED '+' LOGIC
-    // =================================================================
-    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '+') {
-        // Step 1: Enforce the "one" part of "one or more".
-        // If it can't match at least one character, it's an immediate failure.
-        if (t_idx >= (int)text.length() || (pattern[p_idx] != '.' && pattern[p_idx] != text[t_idx])) {
-            return false;
+    else if(pattern[0] == '^'){
+        // Check if input is long enough for the pattern (excluding '^')
+        if (input_line.length() < pattern.length() - 1) return false;
+        for(int i=1;i<pattern.size();i++){
+            // MODIFIED LINE 2
+            if(pattern[i] != '.' && pattern[i] != input_line[i-1])return false;
         }
-
-        // Step 2: After matching one character, recursively handle the "or more" part.
-        // This creates the backtracking. It can either...
-        //   a) ...stop matching for '+' and try the rest of the pattern (p_idx + 2).
-        //   b) ...or match another character for '+' and try this same choice again.
-        return match_here(pattern, p_idx + 2, text, t_idx + 1) || match_here(pattern, p_idx, text, t_idx + 1);
+        return true;
     }
-    // =================================================================
-    // END OF CORRECTED '+' LOGIC
-    // =================================================================
+    else if(true){
+        int len = input_line.size();
 
-    if (p_idx + 1 < (int)pattern.length() && pattern[p_idx + 1] == '?') {
-        return match_here(pattern, p_idx + 2, text, t_idx) ||
-               (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx]) && match_here(pattern, p_idx + 2, text, t_idx + 1));
+        for(int j=0;j<len;j++){
+            string sub = input_line.substr(j);// substring
+            int ptr = 0;// to traverse in string 
+            bool flag = true;// false when nothing matches
+
+            for(int i=0;i<pattern.size();i++){
+                char ch =  pattern[i];
+
+                if(ptr >= sub.size()){// if exceedes
+                    flag = false;
+                    break;
+                }
+                if(i+1 < pattern.size()&&pattern[i+1]  == '+'){
+                    int cnt =0;
+                    while (ptr<sub.size()  && (sub[ptr] == ch || ch == '.'))
+                    {
+                        ptr++;
+                        cnt++;
+                    }
+                    if(i+2 < pattern.size() && (pattern[i+2] == ch || ch == '.')){
+                        if(cnt > 0){
+                            ptr--;
+                        }
+                    }
+                    if(cnt == 0){
+                        flag = false;
+                        break;
+                    }
+                    i++;
+                }else if (i+1 < pattern.size() && pattern[i+1] == '?') {
+                    // It's optional, so we only advance the input pointer if it matches.
+                    if (ptr < sub.size() && (ch == '.' || sub[ptr] == ch)) {
+                        ptr++;
+                    }
+                    i++; // Always advance the pattern pointer past '?'
+                }
+                else if(ch == '\\' && i+1 < pattern.size()){
+                    char meta_char = pattern[i+1];
+                    bool matches = false;
+                    if(meta_char == 'd' && isDigit(sub[ptr])){
+                        matches = true;
+                    }else if(meta_char == 'w' && (isAlpha(sub[ptr])  || isDigit(sub[ptr]) || sub[ptr] == '_')){
+                        matches = true;
+                    }
+                    if(matches){
+                        ptr++;
+                        i++;
+                    }else{
+                        flag = false;
+                        break;
+                    }
+                }else{
+                    if(ch != '.' && ch != sub[ptr]){
+                        flag = false;
+                        break;
+                    }
+                    ptr++;
+                }
+            }
+            if(flag)return true;
+        }
+        return false;
     }
-
-    if (t_idx < (int)text.length() && (pattern[p_idx] == '.' || pattern[p_idx] == text[t_idx])) {
-        return match_here(pattern, p_idx + 1, text, t_idx + 1);
+    else {
+        throw runtime_error("Unhandled pattern " + pattern);
     }
-
-    return false;
 }
 
+int main(int argc, char* argv[]) { // argc - number of argumnets && argv - array of C-style strings (the actual arguments).
 
-// Your main function remains unchanged
-int main(int argc, char* argv[]) {
+    // Flush after every std::cout / std::cerr
     cout << unitbuf;
+    //disable output buffering - Normally, output waits in a buffer until flushed, but with unitbuf, everything gets printed immediately
     cerr << unitbuf;
 
-    if (argc != 3) {
+    if (argc != 3) { // if 3 argumnets return because we need 2
         cerr << "Expected two arguments" << endl;
         return 1;
     }
