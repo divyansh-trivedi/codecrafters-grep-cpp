@@ -8,7 +8,6 @@
 using namespace std;
 
 // --- Global state for captured groups ---
-// Note: In a more advanced engine, this would be part of a match state object.
 unordered_map<int, string> captured_groups;
 
 // Forward declaration for the main recursive function
@@ -116,11 +115,15 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
         int original_group_count = group_count;
         auto original_captures = captured_groups;
 
+        // --- START OF THE CRITICAL FIX ---
+        // Path A (Greedy): Match the quantified atom `A+` again on the remaining text.
         int more_len = match_recursive(pattern.substr(0, atom_len + 1), remaining_text, group_count);
         if (more_len != -1) return atom_match_len + more_len;
 
+        // Path B (Backtrack): If greedy path failed, restore state and match the rest of the pattern.
         group_count = original_group_count;
         captured_groups = original_captures;
+        // --- END OF THE CRITICAL FIX ---
 
         int rest_len = match_recursive(rest, remaining_text, group_count);
         if (rest_len != -1) return atom_match_len + rest_len;
