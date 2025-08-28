@@ -1,123 +1,146 @@
-#include <iostream>
-#include <string>
-#include <cctype>
+#include <bits/stdc++.h>
+using namespace std;
 
-// Forward declaration
-bool match_pattern(const std::string& input_line, const std::string& pattern, bool start_of_line = true);
+bool matchRegex(const string& pattern, const string& text);
 
-// Helper: match group content recursively
-bool match_group(const std::string& input_line, const std::string& group) {
-    // Split alternations inside ( ... )
-    size_t pos = 0, depth = 0;
-    for (size_t i = 0; i < group.size(); i++) {
-        if (group[i] == '(') depth++;
-        else if (group[i] == ')') depth--;
-        else if (group[i] == '|' && depth == 0) {
-            std::string left = group.substr(0, i);
-            std::string right = group.substr(i + 1);
-            return match_pattern(input_line, left, true) || match_pattern(input_line, right, true);
-        }
-    }
-    return match_pattern(input_line, group, true);
+bool isDigit(char c) {
+    return c >= '0' && c <= '9';
 }
 
-bool match_pattern(const std::string& input_line, const std::string& pattern, bool start_of_line) {
-    if (pattern.empty()) return true;
-    if (pattern == "$") return input_line.empty();
-    if (input_line.empty() && !pattern.empty()) return false;
+// Forward recursive matcher
+bool matchHere(const string& pat, int pi, const string& txt, int ti);
 
-    // Handle groups: ( ... )
-    if (pattern[0] == '(') {
-        size_t close = 1, depth = 1;
-        while (close < pattern.size() && depth > 0) {
-            if (pattern[close] == '(') depth++;
-            else if (pattern[close] == ')') depth--;
-            close++;
+// Match a group ( ... ) possibly with | alternatives
+bool matchGroup(const string& group, const string& txt, int ti, int &consumed) {
+    int depth = 0;
+    vector<string> parts;
+    string cur;
+    for (char c : group) {
+        if (c == '(') depth++;
+        if (c == ')') depth--;
+        if (c == '|' && depth == 0) {
+            parts.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
         }
-        std::string group = pattern.substr(1, close - 2); // inside ( ... )
-        char quant = (close < pattern.size()) ? pattern[close] : '\0';
+    }
+    parts.push_back(cur);
 
-        if (quant == '+') {
-            size_t i = 0;
-            if (!match_group(input_line.substr(i), group)) return false;
-            while (i < input_line.size() && match_group(input_line.substr(i), group)) {
-                i++;
+    for (auto &alt : parts) {
+        int tmp = ti;
+        if (matchHere(alt, 0, txt, tmp)) {
+            consumed = tmp - ti;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Core recursive engine
+bool matchHere(const string& pat, int pi, const string& txt, int ti) {
+    if (pi == (int)pat.size()) return ti == (int)txt.size();
+    if (pat[pi] == '$' && pi + 1 == (int)pat.size()) return ti == (int)txt.size();
+
+    if (pat[pi] == '(') {
+        int depth = 1, j = pi + 1;
+        while (j < (int)pat.size() && depth > 0) {
+            if (pat[j] == '(') depth++;
+            else if (pat[j] == ')') depth--;
+            j++;
+        }
+        string inside = pat.substr(pi + 1, j - pi - 2);
+        char quant = (j < (int)pat.size() ? pat[j] : '\0');
+
+        if (quant == '+' || quant == '?') {
+            int consumed = 0;
+            if (!matchGroup(inside, txt, ti, consumed)) {
+                if (quant == '?') return matchHere(pat, j + 1, txt, ti);
+                return false;
             }
-            return match_pattern(input_line.substr(i), pattern.substr(close + 1), false);
-        }
-        else if (quant == '?') {
-            return match_pattern(input_line, pattern.substr(close + 1), false) ||
-                   (match_group(input_line, group) &&
-                    match_pattern(input_line.substr(1), pattern.substr(close + 1), false));
-        }
-        else {
-            if (match_group(input_line, group))
-                return match_pattern(input_line.substr(1), pattern.substr(close), false);
-            return false;
+            if (quant == '+') {
+                int pos = ti + consumed;
+                while (true) {
+                    int c2 = 0;
+                    if (matchGroup(inside, txt, pos, c2)) {
+                        pos += c2;
+                    } else break;
+                }
+                return matchHere(pat, j + 1, txt, pos);
+            } else {
+                if (matchHere(pat, j + 1, txt, ti + consumed)) return true;
+                return matchHere(pat, j + 1, txt, ti);
+            }
+        } else {
+            int consumed = 0;
+            if (!matchGroup(inside, txt, ti, consumed)) return false;
+            return matchHere(pat, j, txt, ti + consumed);
         }
     }
 
-    // Handle .
-    if (pattern[0] == '.') {
-        return match_pattern(input_line.substr(1), pattern.substr(1), false);
+    if (pi + 1 < (int)pat.size() && (pat[pi + 1] == '?' || pat[pi + 1] == '+')) {
+        char quant = pat[pi + 1];
+        if (quant == '?') {
+            if (ti < (int)txt.size() && 
+                (pat[pi] == '.' || (pat[pi] == '\\' && pi + 1 < (int)pat.size() && pat[pi+1]=='d' && isDigit(txt[ti])) || 
+                pat[pi] == txt[ti])) {
+                if (matchHere(pat, pi + 2, txt, ti + 1)) return true;
+            }
+            return matchHere(pat, pi + 2, txt, ti);
+        } else { // +
+            int start = ti;
+            if (ti < (int)txt.size() && 
+                (pat[pi] == '.' || (pat[pi] == '\\' && pi + 1 < (int)pat.size() && pat[pi+1]=='d' && isDigit(txt[ti])) || 
+                pat[pi] == txt[ti])) {
+                ti++;
+            } else return false;
+            while (ti < (int)txt.size() && 
+                   (pat[pi] == '.' || (pat[pi] == '\\' && pi + 1 < (int)pat.size() && pat[pi+1]=='d' && isDigit(txt[ti])) || 
+                   pat[pi] == txt[ti])) {
+                ti++;
+            }
+            return matchHere(pat, pi + 2, txt, ti);
+        }
     }
 
-    // Handle \d
-    if (pattern.size() >= 2 && pattern.substr(0, 2) == "\\d") {
-        if (isdigit(input_line[0])) {
-            return match_pattern(input_line.substr(1), pattern.substr(2), false);
-        }
+    if (pat[pi] == '.') {
+        if (ti < (int)txt.size()) return matchHere(pat, pi + 1, txt, ti + 1);
         return false;
     }
-
-    // Handle \w
-    if (pattern.size() >= 2 && pattern.substr(0, 2) == "\\w") {
-        if (isalnum(input_line[0])) {
-            return match_pattern(input_line.substr(1), pattern.substr(2), false);
-        }
+    if (pat[pi] == '\\' && pi + 1 < (int)pat.size() && pat[pi+1] == 'd') {
+        if (ti < (int)txt.size() && isDigit(txt[ti])) return matchHere(pat, pi + 2, txt, ti + 1);
         return false;
     }
-
-    // Direct char match
-    if (pattern[0] == input_line[0]) {
-        return match_pattern(input_line.substr(1), pattern.substr(1), false);
+    if (ti < (int)txt.size() && pat[pi] == txt[ti]) {
+        return matchHere(pat, pi + 1, txt, ti + 1);
     }
 
-    if (start_of_line) return false;
-    return match_pattern(input_line.substr(1), pattern, false);
+    return false;
 }
 
-bool match_patterns(const std::string& input_line, const std::string& pattern) {
+bool matchRegex(const string& pattern, const string& text) {
     if (!pattern.empty() && pattern[0] == '^') {
-        return match_pattern(input_line, pattern.substr(1), true);
+        return matchHere(pattern, 1, text, 0);
     }
-    return match_pattern(input_line, pattern, false);
+    for (int i = 0; i <= (int)text.size(); i++) {
+        if (matchHere(pattern, 0, text, i)) return true;
+    }
+    return false;
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
 
-    if (argc != 3) {
-        std::cerr << "Expected two arguments" << std::endl;
-        return 1;
+    string flag, pattern;
+    if (argc >= 3) {
+        flag = argv[1];
+        pattern = argv[2];
     }
 
-    std::string flag = argv[1];
-    std::string pattern = argv[2];
+    string input;
+    getline(cin, input);
 
-    if (flag != "-E") {
-        std::cerr << "Expected first argument to be '-E'" << std::endl;
-        return 1;
-    }
-
-    std::string input_line;
-    std::getline(std::cin, input_line);
-
-    try {
-        bool result = match_patterns(input_line, pattern);
-        return result ? 0 : 1;
-    } catch (...) {
-        return 1;
-    }
+    bool ok = matchRegex(pattern, input);
+    return ok ? 0 : 1;
 }
