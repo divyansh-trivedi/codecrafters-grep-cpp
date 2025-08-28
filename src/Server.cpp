@@ -1,187 +1,222 @@
-#include <iostream>
+// Pattern.h
+#ifndef PATTERN_H
+#define PATTERN_H
+
 #include <string>
-#include <vector>
-#include <cctype>
 
-using namespace std;
-
-enum class Quantifier { NONE, PLUS, MARK };
-enum class RegType { SINGLE_CHAR, DIGIT, ALPHANUM, START, END, LIST, ALT, ETK };
-
-struct Re {
-    RegType type = RegType::ETK;
-    string ccl;
-    bool isNegative = false;
-    Quantifier quantifier = Quantifier::NONE;
-    vector<vector<Re>> alternatives;
-};
-
-class RegParser {
+class Pattern {
 public:
-    RegParser(const string& pattern) : _pattern(pattern), _pos(0) {}
-
-    bool parse() {
-        while (!isEof()) {
-            Re element = parseElement();
-            if (element.type == RegType::ETK) return false;
-            regex.push_back(element);
-        }
-        return true;
-    }
-
-    vector<Re> regex;
-
-    // Recursive matching
-    static bool match_current(char c, const Re& r) {
-        switch (r.type) {
-            case RegType::DIGIT: return isdigit(c);
-            case RegType::ALPHANUM: return isalnum(c) || c == '_';
-            case RegType::SINGLE_CHAR: return r.ccl == "." || c == r.ccl[0];
-            case RegType::LIST:
-                return r.isNegative ? r.ccl.find(c) == string::npos : r.ccl.find(c) != string::npos;
-            case RegType::START: return true;
-            case RegType::END: return c == '\0';
-            default: return false;
-        }
-    }
-
-    static bool match_from(const char** c, const vector<Re>& regex, size_t idx) {
-        const char* pos = *c;
-        size_t rIdx = idx;
-
-        while (rIdx < regex.size()) {
-            const Re& r = regex[rIdx];
-
-            // Quantifiers
-            if (r.quantifier == Quantifier::PLUS) {
-                const char* t = pos;
-                if (!match_current(*t, r)) return false;
-                while (*t != '\0' && match_current(*t, r)) t++;
-                while (t >= pos) {
-                    const char* tmp = t;
-                    if (match_from(&tmp, regex, rIdx + 1)) { *c = tmp; return true; }
-                    if (t == pos) break;
-                    t--;
-                }
-                return false;
-            }
-            if (r.quantifier == Quantifier::MARK) {
-                const char* t = pos;
-                if (match_current(*t, r)) {
-                    const char* tmp = t + 1;
-                    if (match_from(&tmp, regex, rIdx + 1)) { *c = tmp; return true; }
-                }
-                return match_from(&pos, regex, rIdx + 1);
-            }
-
-            // Alternation
-            if (r.type == RegType::ALT) {
-                for (const auto& alt : r.alternatives) {
-                    const char* t = pos;
-                    if (match_from(&t, alt, 0) && match_from(&t, regex, rIdx + 1)) {
-                        *c = t;
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            // Single character
-            if (!match_current(*pos, r)) return false;
-            if (r.type != RegType::START) pos++;
-            rIdx++;
-        }
-
-        *c = pos;
-        return true;
-    }
+    Pattern(const std::string& pattern);
+    bool matches(const std::string& text) const;
 
 private:
-    string _pattern;
-    size_t _pos = 0;
-
-    bool isEof() { return _pos >= _pattern.size(); }
-    char current() { return isEof() ? '\0' : _pattern[_pos]; }
-    void advance() { if(!isEof()) _pos++; }
-
-    Re parseElement() {
-        if (current() == '^') { advance(); return Re{RegType::START}; }
-        if (current() == '$') { advance(); return Re{RegType::END}; }
-
-        if (current() == '\\') {
-            advance();
-            if (current() == 'd') { advance(); return Re{RegType::DIGIT}; }
-            if (current() == 'w') { advance(); return Re{RegType::ALPHANUM}; }
-            char c = current(); advance(); Re r{RegType::SINGLE_CHAR, string(1, c)}; applyQuant(r); return r;
-        }
-
-        if (current() == '[') { return parseCharacterClass(); }
-        if (current() == '(') { return parseGroup(); }
-
-        // single char
-        char c = current(); advance();
-        Re r{RegType::SINGLE_CHAR, string(1,c)};
-        applyQuant(r);
-        return r;
-    }
-
-    Re parseCharacterClass() {
-        advance(); // skip '['
-        Re r{RegType::LIST};
-        if (current() == '^') { r.isNegative = true; advance(); }
-        string buffer;
-        while (!isEof() && current() != ']') { buffer += current(); advance(); }
-        if (current() == ']') advance();
-        r.ccl = buffer;
-        applyQuant(r);
-        return r;
-    }
-
-    Re parseGroup() {
-        advance(); // skip '('
-        Re r{RegType::ALT};
-        vector<Re> seq;
-        while (!isEof()) {
-            if (current() == '|') { advance(); r.alternatives.push_back(seq); seq.clear(); }
-            else if (current() == ')') { advance(); r.alternatives.push_back(seq); break; }
-            else seq.push_back(parseElement());
-        }
-        applyQuant(r);
-        return r;
-    }
-
-    void applyQuant(Re& r) {
-        if (!isEof() && (current() == '+' || current() == '?')) {
-            r.quantifier = current() == '+' ? Quantifier::PLUS : Quantifier::MARK;
-            advance();
-        }
-    }
+    std::string compiled_pattern;
+    bool match_here(const std::string& text, const std::string& regexp) const;
+    bool match_plus(const std::string& text, char match_char, const std::string& regexp) const;
+    bool match_question_mark(const std::string& text, char match_char, const std::string& regexp) const;
 };
 
-// Main matching function
-bool match_pattern(const string& input_line, const string& pattern) {
-    RegParser rp(pattern);
-    if (!rp.parse()) return false;
+class PatternCompiler {
+public:
+    PatternCompiler(const std::string& pattern);
+    Pattern compile();
 
-    const char* c = input_line.c_str();
-    bool anchored = !rp.regex.empty() && rp.regex[0].type == RegType::START;
-    if (anchored) return RegParser::match_from(&c, rp.regex, 1);
+private:
+    std::string source_pattern;
+};
 
-    while (*c != '\0') {
-        const char* tmp = c;
-        if (RegParser::match_from(&tmp, rp.regex, 0)) return true;
-        c++;
+#endif // PATTERN_H
+```cpp
+// Pattern.cpp
+#include "Pattern.h"
+#include <cctype>
+#include <vector>
+
+Pattern::Pattern(const std::string& pattern) : compiled_pattern(pattern) {}
+
+bool Pattern::matches(const std::string& text) const {
+    if (compiled_pattern.empty()) return true;
+    if (compiled_pattern[0] == '^') {
+        return match_here(text, compiled_pattern.substr(1));
     }
-    const char* tmp = c;
-    return RegParser::match_from(&tmp, rp.regex, 0);
+    std::string remaining_text = text;
+    while (!remaining_text.empty()) {
+        if (match_here(remaining_text, compiled_pattern)) {
+            return true;
+        }
+        remaining_text = remaining_text.substr(1);
+    }
+    return match_here("", compiled_pattern);
 }
 
+bool Pattern::match_here(const std::string& text, const std::string& regexp) const {
+    if (regexp.empty()) return true;
+    if (regexp == "$") return text.empty();
+
+    if (regexp.length() > 1) {
+        if (regexp[1] == '?') {
+            return match_question_mark(text, regexp[0], regexp.substr(2));
+        }
+        if (regexp[1] == '+') {
+            return !text.empty() && (regexp[0] == '.' || text[0] == regexp[0]) &&
+                   match_plus(text.substr(1), regexp[0], regexp.substr(2));
+        }
+    }
+
+    if (regexp[0] == '(' && regexp.back() == ')') {
+        std::string content = regexp.substr(1, regexp.length() - 2);
+        size_t pipe_pos = content.find('|');
+        if (pipe_pos != std::string::npos) {
+            std::string left = content.substr(0, pipe_pos);
+            std::string right = content.substr(pipe_pos + 1);
+            return match_here(text, left) || match_here(text, right);
+        }
+    }
+
+    if (regexp.length() >= 2 && regexp.substr(0, 2) == "\\d") {
+        return !text.empty() && isdigit(text[0]) && match_here(text.substr(1), regexp.substr(2));
+    }
+
+    if (regexp.length() >= 2 && regexp.substr(0, 2) == "\\w") {
+        return !text.empty() && (isalnum(text[0]) || text[0] == '_') && match_here(text.substr(1), regexp.substr(2));
+    }
+
+    if (regexp[0] == '[') {
+        size_t close_bracket = regexp.find(']');
+        if (close_bracket != std::string::npos) {
+            std::string content = regexp.substr(1, close_bracket - 1);
+            bool negated = !content.empty() && content[0] == '^';
+            if (negated) {
+                content = content.substr(1);
+            }
+            bool found = !text.empty() && content.find(text[0]) != std::string::npos;
+            if (negated ? !found : found) {
+                return match_here(text.substr(1), regexp.substr(close_bracket + 1));
+            }
+        }
+        return false;
+    }
+
+    if (!text.empty() && (regexp[0] == '.' || regexp[0] == text[0])) {
+        return match_here(text.substr(1), regexp.substr(1));
+    }
+
+    return false;
+}
+
+bool Pattern::match_plus(const std::string& text, char match_char, const std::string& regexp) const {
+    std::string remaining_text = text;
+    while (!remaining_text.empty() && (remaining_text[0] == match_char || match_char == '.')) {
+        if (match_here(remaining_text.substr(1), regexp)) {
+            return true;
+        }
+        remaining_text = remaining_text.substr(1);
+    }
+    return false;
+}
+
+bool Pattern::match_question_mark(const std::string& text, char match_char, const std::string& regexp) const {
+    if (!text.empty() && (text[0] == match_char || match_char == '.')) {
+        if (match_here(text.substr(1), regexp)) {
+            return true;
+        }
+    }
+    return match_here(text, regexp);
+}
+
+PatternCompiler::PatternCompiler(const std::string& pattern) : source_pattern(pattern) {}
+
+Pattern PatternCompiler::compile() {
+    return Pattern(source_pattern);
+}
+```cpp
+// Main.cpp
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <filesystem>
+#include "Pattern.h"
+
+namespace fs = std::filesystem;
+
+void searchTextFiles(const Pattern& pattern, const std::vector<std::string>& filepaths);
+void handleRecursive(const Pattern& pattern, const std::string& filepath);
+
 int main(int argc, char* argv[]) {
-    if (argc != 3 || string(argv[1]) != "-E") return 1;
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " -E \"pattern\" [file...]" << std::endl;
+        return 1;
+    }
 
-    string input_line;
-    getline(cin, input_line);
-    string pattern = argv[2];
+    std::vector<std::string> args(argv, argv + argc);
 
-    return match_pattern(input_line, pattern) ? 0 : 1;
+    if (args.size() == 3 && args[1] == "-E") {
+        Pattern pattern = PatternCompiler(args[2]).compile();
+        std::string inputLine;
+        if (std::getline(std::cin, inputLine)) {
+            if (pattern.matches(inputLine)) {
+                return 0;
+            }
+        }
+        return 1;
+    } else {
+        std::string firstFlag = args[1];
+        if (firstFlag == "-E") {
+            Pattern pattern = PatternCompiler(args[2]).compile();
+            std::vector<std::string> filepaths(args.begin() + 3, args.end());
+            searchTextFiles(pattern, filepaths);
+        } else if (firstFlag == "-r") {
+            if (args.size() < 4 || args[2] != "-E") {
+                 std::cerr << "Usage: " << argv[0] << " -r -E \"pattern\" <directory>" << std::endl;
+                 return 1;
+            }
+            Pattern pattern = PatternCompiler(args[3]).compile();
+            handleRecursive(pattern, args[4]);
+        }
+    }
+
+    return 0;
+}
+
+void searchTextFiles(const Pattern& pattern, const std::vector<std::string>& filepaths) {
+    bool foundOne = false;
+    for (const auto& filepath : filepaths) {
+        std::ifstream file(filepath);
+        if (file.is_open()) {
+            std::string inputLine;
+            while (std::getline(file, inputLine)) {
+                if (pattern.matches(inputLine)) {
+                    foundOne = true;
+                    if (filepaths.size() > 1) {
+                        std::cout << filepath << ":" << inputLine << std::endl;
+                    } else {
+                        std::cout << inputLine << std::endl;
+                    }
+                }
+            }
+        } else {
+            std::cerr << "Error: could not open file: " << filepath << std::endl;
+        }
+    }
+    exit(foundOne ? 0 : 1);
+}
+
+void handleRecursive(const Pattern& pattern, const std::string& filepath) {
+    fs::path startPath(filepath);
+    if (!fs::exists(startPath)) {
+        std::cerr << "Error: path does not exist: " << filepath << std::endl;
+        exit(2);
+    }
+
+    bool foundOne = false;
+    if (fs::is_directory(startPath)) {
+        for (const auto& entry : fs::recursive_directory_iterator(startPath)) {
+            if (fs::is_regular_file(entry)) {
+                searchTextFiles(pattern, {entry.path().string()});
+            }
+        }
+    } else {
+        searchTextFiles(pattern, {filepath});
+    }
 }
