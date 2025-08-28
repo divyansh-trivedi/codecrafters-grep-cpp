@@ -20,6 +20,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
 
     if (pattern[0] == '^') {
         int group_count = 0;
+        // For an anchored pattern, the match must consume the entire line.
         return match_recursive(pattern.substr(1), input_line, group_count) == (int)input_line.length();
     }
 
@@ -53,108 +54,115 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
             int len = match_recursive(left, text, group_count);
             if (len != -1) return len;
             // Reset group count for the other branch of alternation
-            int right_group_count = 0;
+            int right_group_count = group_count;
             return match_recursive(right, text, right_group_count);
         }
     }
-
-    if (pattern[0] == '(') {
+    
+    // --- START OF RE-ARCHITECTED LOGIC ---
+    // First, determine the "atom" (the unit to be matched) and check for a quantifier after it.
+    
+    size_t atom_len = 1; // Default atom is a single character
+    if (pattern[0] == '\\' && pattern.length() > 1) {
+        atom_len = 2;
+    } else if (pattern[0] == '[') {
+        size_t end_bracket = pattern.find(']', 1);
+        if (end_bracket != string::npos) atom_len = end_bracket + 1;
+    } else if (pattern[0] == '(') {
         int level = 0;
-        size_t end_paren_pos = string::npos;
         for (size_t i = 1; i < pattern.length(); ++i) {
             if (pattern[i] == '(') level++;
             else if (pattern[i] == ')') {
                 if (level-- == 0) {
-                    end_paren_pos = i;
+                    atom_len = i + 1;
                     break;
                 }
             }
         }
-
-        if (end_paren_pos != string::npos) {
-            string group_content = pattern.substr(1, end_paren_pos - 1);
-            string after_group = pattern.substr(end_paren_pos + 1);
-            
-            // This is a capturing group
-            int current_capture_index = ++group_count;
-
-            int group_len = match_recursive(group_content, text, group_count);
-            if (group_len != -1) {
-                // Capture the matched text
-                captured_groups[current_capture_index] = text.substr(0, group_len);
-                
-                int rest_len = match_recursive(after_group, text.substr(group_len), group_count);
-                if (rest_len != -1) {
-                    return group_len + rest_len;
-                }
-            }
-            // Backtrack: if the rest of the pattern failed, un-capture the group
-            captured_groups.erase(current_capture_index);
-            return -1;
-        }
     }
 
-    // Handle quantifiers for single characters
-    if (pattern.length() > 1 && (pattern[1] == '?' || pattern[1] == '+')) {
-        string rest = pattern.substr(2);
-        if (pattern[1] == '?') {
-            int len = match_recursive(rest, text, group_count);
-            if (len != -1) return len;
+    char quantifier = (atom_len < pattern.length()) ? pattern[atom_len] : 0;
+    string atom = pattern.substr(0, atom_len);
+    string rest = pattern.substr(atom_len + (quantifier == '?' || quantifier == '+' ? 1 : 0));
+
+    if (quantifier == '?') {
+        int len = match_recursive(rest, text, group_count);
+        if (len != -1) return len;
+        int atom_match_len = match_recursive(atom, text, group_count);
+        if (atom_match_len != -1) {
+            int rest_len = match_recursive(rest, text.substr(atom_match_len), group_count);
+            if (rest_len != -1) return atom_match_len + rest_len;
         }
-        if (!text.empty() && (pattern[0] == '.' || pattern[0] == text[0])) {
-            if (pattern[1] == '+') {
-                int more_len = match_recursive(pattern, text.substr(1), group_count);
-                if (more_len != -1) return 1 + more_len;
-            }
-            int rest_len = match_recursive(rest, text.substr(1), group_count);
-            if (rest_len != -1) return 1 + rest_len;
+        return -1;
+    }
+
+    if (quantifier == '+') {
+        int atom_match_len = match_recursive(atom, text, group_count);
+        if (atom_match_len == -1) return -1;
+
+        string remaining_text = text.substr(atom_match_len);
+        
+        // Greedy path: try to match the quantified atom again
+        int more_len = match_recursive(pattern.substr(0, atom_len + 1), remaining_text, group_count);
+        if (more_len != -1) return atom_match_len + more_len;
+
+        // Backtrack path: match the rest of the pattern
+        int rest_len = match_recursive(rest, remaining_text, group_count);
+        if (rest_len != -1) return atom_match_len + rest_len;
+        
+        return -1;
+    }
+    // --- END OF RE-ARCHITECTED LOGIC ---
+
+
+    // Handle the actual matching of the atom
+    if (pattern[0] == '(') {
+        string group_content = pattern.substr(1, atom_len - 2);
+        int current_capture_index = ++group_count;
+        int group_len = match_recursive(group_content, text, group_count);
+        if (group_len != -1) {
+            captured_groups[current_capture_index] = text.substr(0, group_len);
+            int rest_len = match_recursive(rest, text.substr(group_len), group_count);
+            if (rest_len != -1) return group_len + rest_len;
         }
+        captured_groups.erase(current_capture_index); // Backtrack
         return -1;
     }
     
-    // Handle single "atom" matches
     if (text.empty()) return -1;
 
-    // --- START OF NEW CODE: Handle backreferences ---
-    if (pattern[0] == '\\' && pattern.length() > 1 && isdigit(pattern[1])) {
-        int group_num = pattern[1] - '0';
-        if (captured_groups.count(group_num)) {
-            string captured = captured_groups[group_num];
-            if (text.rfind(captured, 0) == 0) { // C++20 text.starts_with(captured)
-                int rest_len = match_recursive(pattern.substr(2), text.substr(captured.length()), group_count);
-                if (rest_len != -1) {
-                    return captured.length() + rest_len;
+    if (pattern[0] == '\\' && pattern.length() > 1) {
+        if (isdigit(pattern[1])) { // Backreference
+            int group_num = pattern[1] - '0';
+            if (captured_groups.count(group_num)) {
+                string captured = captured_groups[group_num];
+                if (text.rfind(captured, 0) == 0) {
+                    int rest_len = match_recursive(rest, text.substr(captured.length()), group_count);
+                    if (rest_len != -1) return captured.length() + rest_len;
                 }
             }
+            return -1;
+        }
+        if ((pattern[1] == 'd' && isdigit(text[0])) || (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'))) {
+            int len = match_recursive(rest, text.substr(1), group_count);
+            if (len != -1) return 1 + len;
         }
         return -1;
     }
-    // --- END OF NEW CODE ---
 
     if (pattern[0] == '[') {
-        size_t end_bracket = pattern.find(']', 1);
-        if (end_bracket != string::npos) {
-            bool is_negated = pattern[1] == '^';
-            string group = pattern.substr(is_negated ? 2 : 1, end_bracket - (is_negated ? 2 : 1));
-            bool found = group.find(text[0]) != string::npos;
-            if (is_negated != found) {
-                int len = match_recursive(pattern.substr(end_bracket + 1), text.substr(1), group_count);
-                if (len != -1) return 1 + len;
-            }
-        }
-        return -1;
-    }
-
-    if (pattern[0] == '\\' && pattern.length() > 1) {
-        if ((pattern[1] == 'd' && isdigit(text[0])) || (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'))) {
-            int len = match_recursive(pattern.substr(2), text.substr(1), group_count);
+        bool is_negated = pattern[1] == '^';
+        string group = pattern.substr(is_negated ? 2 : 1, atom_len - (is_negated ? 2 : 1) -1);
+        bool found = group.find(text[0]) != string::npos;
+        if (is_negated != found) {
+            int len = match_recursive(rest, text.substr(1), group_count);
             if (len != -1) return 1 + len;
         }
         return -1;
     }
 
     if (pattern[0] == '.' || pattern[0] == text[0]) {
-        int len = match_recursive(pattern.substr(1), text.substr(1), group_count);
+        int len = match_recursive(rest, text.substr(1), group_count);
         if (len != -1) return 1 + len;
     }
 
