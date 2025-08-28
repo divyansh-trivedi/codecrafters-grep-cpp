@@ -1,141 +1,154 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-bool matchRegex(const string &pattern, const string &text);
 bool matchHere(const string &pattern, const string &text);
 
-// utility
-bool isDigit(char c) {
-    return c >= '0' && c <= '9';
+bool matchChar(char pc, char tc) {
+    return pc == '.' || pc == tc;
 }
 
-// split a group by top-level '|'
-vector<string> splitAlternatives(const string &s) {
-    vector<string> parts;
-    string cur;
-    int depth = 0;
-    for (char c : s) {
-        if (c == '(') depth++;
-        else if (c == ')') depth--;
-        if (c == '|' && depth == 0) {
-            parts.push_back(cur);
-            cur.clear();
-        } else {
-            cur.push_back(c);
+// Try to match an expression with * or + repetition
+bool repeatMatch(const string &inside, const string &after, const string &text, bool atLeastOnce) {
+    // Try matching the inside group multiple times
+    if (atLeastOnce) {
+        // must match once
+        for (size_t i = 0; i <= text.size(); i++) {
+            if (matchHere(inside, text.substr(0, i))) {
+                string rest = text.substr(i);
+                // option 1: match more
+                if (repeatMatch(inside, after, rest, false)) return true;
+                // option 2: stop and continue
+                if (matchHere(after, rest)) return true;
+            }
         }
+        return false;
+    } else {
+        // zero or more
+        // try consuming 0 chars
+        if (matchHere(after, text)) return true;
+        // try consuming more
+        for (size_t i = 0; i <= text.size(); i++) {
+            if (matchHere(inside, text.substr(0, i))) {
+                if (repeatMatch(inside, after, text.substr(i), false)) return true;
+            }
+        }
+        return false;
     }
-    parts.push_back(cur);
-    return parts;
 }
 
-bool matchRegex(const string &pattern, const string &text) {
-    if (!pattern.empty() && pattern[0] == '^') {
-        return matchHere(pattern.substr(1), text);
-    }
-    for (size_t i = 0; i <= text.size(); i++) {
-        if (matchHere(pattern, text.substr(i))) return true;
-    }
-    return false;
-}
-
+// Main matcher
 bool matchHere(const string &pattern, const string &text) {
-    if (pattern.empty()) return true;
+    if (pattern.empty()) return text.empty();
+
+    // Handle $
     if (pattern == "$") return text.empty();
 
-    // group (...)
+    // Handle group ( ... )
     if (pattern[0] == '(') {
-        int depth = 0;
-        size_t i = 0;
-        for (; i < pattern.size(); i++) {
-            if (pattern[i] == '(') depth++;
-            else if (pattern[i] == ')') {
+        int depth = 0, j = 0;
+        for (; j < (int)pattern.size(); j++) {
+            if (pattern[j] == '(') depth++;
+            else if (pattern[j] == ')') {
                 depth--;
                 if (depth == 0) break;
             }
         }
-        if (depth != 0) return false; // unbalanced
-        string inside = pattern.substr(1, i - 1);
-        string after = (i + 1 < pattern.size()) ? pattern.substr(i + 1) : "";
+        string inside = pattern.substr(1, j - 1);
+        string after = (j + 1 < pattern.size() ? pattern.substr(j + 1) : "");
 
-        char quant = '\0';
-        if (!after.empty() && (after[0] == '+' || after[0] == '?')) {
+        // Handle alternation
+        vector<string> alts;
+        {
+            int d = 0; string cur;
+            for (char c : inside) {
+                if (c == '(') d++;
+                if (c == ')') d--;
+                if (c == '|' && d == 0) {
+                    alts.push_back(cur);
+                    cur.clear();
+                } else {
+                    cur.push_back(c);
+                }
+            }
+            alts.push_back(cur);
+        }
+
+        char quant = 0;
+        if (!after.empty() && (after[0] == '?' || after[0] == '*' || after[0] == '+')) {
             quant = after[0];
             after = after.substr(1);
         }
 
-        vector<string> alternatives = splitAlternatives(inside);
-
-        if (quant == '+') {
-            // must match at least once
-            for (auto &alt : alternatives) {
-                // try all prefixes of text that match alt
+        if (quant == '?') {
+            // try with group or without
+            for (auto &alt : alts) {
                 for (size_t k = 0; k <= text.size(); k++) {
-                    if (matchHere(alt, text.substr(0, k))) {
-                        // after first match, either continue group+ or move to after
-                        if (matchHere("(" + inside + ")+" + after, text.substr(k)))
-                            return true;
-                        if (matchHere(after, text.substr(k)))
-                            return true;
-                    }
-                }
-            }
-            return false;
-        } else if (quant == '?') {
-            // 0 or 1 times
-            for (auto &alt : alternatives) {
-                for (size_t k = 0; k <= text.size(); k++) {
-                    if (matchHere(alt, text.substr(0, k)) &&
-                        matchHere(after, text.substr(k)))
+                    if (matchHere(alt, text.substr(0, k)) && matchHere(after, text.substr(k)))
                         return true;
                 }
             }
-            // skip
             return matchHere(after, text);
+        }
+        else if (quant == '*') {
+            for (auto &alt : alts) {
+                if (repeatMatch(alt, after, text, false)) return true;
+            }
+            return false;
+        }
+        else if (quant == '+') {
+            for (auto &alt : alts) {
+                if (repeatMatch(alt, after, text, true)) return true;
+            }
+            return false;
         } else {
-            // plain group
-            for (auto &alt : alternatives) {
+            // no quantifier, must match once
+            for (auto &alt : alts) {
                 for (size_t k = 0; k <= text.size(); k++) {
                     if (matchHere(alt, text.substr(0, k)) &&
-                        matchHere(after, text.substr(k)))
-                        return true;
+                        matchHere(after, text.substr(k))) return true;
                 }
             }
             return false;
         }
     }
 
-    // escape \d
-    if (pattern.size() >= 2 && pattern[0] == '\\' && pattern[1] == 'd') {
-        if (!text.empty() && isDigit(text[0])) {
-            return matchHere(pattern.substr(2), text.substr(1));
-        }
-        return false;
+    // Handle ^ anchor
+    if (pattern[0] == '^') {
+        return matchHere(pattern.substr(1), text);
     }
 
-    // dot
-    if (pattern[0] == '.') {
-        if (!text.empty()) return matchHere(pattern.substr(1), text.substr(1));
-        return false;
-    }
-
-    // literal char
-    if (!text.empty() && pattern[0] == text[0]) {
+    // Match first char
+    if (!text.empty() && matchChar(pattern[0], text[0])) {
         return matchHere(pattern.substr(1), text.substr(1));
     }
 
     return false;
 }
 
-int main(int argc, char* argv[]) {
+bool matchRegex(const string &pattern, const string &text) {
+    if (!pattern.empty() && pattern[0] == '^')
+        return matchHere(pattern.substr(1), text);
+    for (size_t i = 0; i <= text.size(); i++) {
+        if (matchHere(pattern, text.substr(i))) return true;
+    }
+    return false;
+}
+
+int main(int argc, char *argv[]) {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
-    string pattern, input;
-    if (argc >= 3 && string(argv[1]) == "-E") {
-        pattern = argv[2];
+    string regex;
+    if (argc > 2 && string(argv[1]) == "-E") {
+        regex = argv[2];
+    } else {
+        cerr << "Usage: ./your_program.sh -E <pattern>\n";
+        return 1;
     }
-    getline(cin, input);
 
-    bool matched = matchRegex(pattern, input);
-    return matched ? 0 : 1;
+    string input, text;
+    while (getline(cin, input)) text += input;
+
+    bool ok = matchRegex(regex, text);
+    return ok ? 0 : 1;
 }
