@@ -3,24 +3,31 @@
 #include <stdexcept>
 #include <cctype>
 #include <vector>
+#include <unordered_map>
 
 using namespace std;
 
+// --- Global state for captured groups ---
+// Note: In a more advanced engine, this would be part of a match state object.
+unordered_map<int, string> captured_groups;
+
 // Forward declaration for the main recursive function
-int match_recursive(const string& pattern, const string& text);
+int match_recursive(const string& pattern, const string& text, int& group_count);
 
 // The main entry point for the regex engine.
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.empty()) return true;
 
     if (pattern[0] == '^') {
-        // For an anchored pattern, the match must consume the entire line.
-        return match_recursive(pattern.substr(1), input_line) == (int)input_line.length();
+        int group_count = 0;
+        return match_recursive(pattern.substr(1), input_line, group_count) == (int)input_line.length();
     }
 
     // For unanchored patterns, loop and try to match at every position.
     for (size_t i = 0; i <= input_line.length(); ++i) {
-        if (match_recursive(pattern, input_line.substr(i)) != -1) {
+        captured_groups.clear(); // Reset captures for each new starting position
+        int group_count = 0;
+        if (match_recursive(pattern, input_line.substr(i), group_count) != -1) {
             return true;
         }
     }
@@ -28,7 +35,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
 }
 
 // The core recursive engine. Returns match length or -1 on failure.
-int match_recursive(const string& pattern, const string& text) {
+int match_recursive(const string& pattern, const string& text, int& group_count) {
     if (pattern.empty()) return 0;
 
     if (pattern[0] == '$' && pattern.length() == 1) {
@@ -43,9 +50,11 @@ int match_recursive(const string& pattern, const string& text) {
         else if (pattern[i] == '|' && depth == 0) {
             string left = pattern.substr(0, i);
             string right = pattern.substr(i + 1);
-            int len = match_recursive(left, text);
+            int len = match_recursive(left, text, group_count);
             if (len != -1) return len;
-            return match_recursive(right, text);
+            // Reset group count for the other branch of alternation
+            int right_group_count = 0;
+            return match_recursive(right, text, right_group_count);
         }
     }
 
@@ -65,45 +74,23 @@ int match_recursive(const string& pattern, const string& text) {
         if (end_paren_pos != string::npos) {
             string group_content = pattern.substr(1, end_paren_pos - 1);
             string after_group = pattern.substr(end_paren_pos + 1);
-            char quantifier = after_group.empty() ? 0 : after_group[0];
+            
+            // This is a capturing group
+            int current_capture_index = ++group_count;
 
-            if (quantifier == '+') {
-                // Must match the group content at least once.
-                int len1 = match_recursive(group_content, text);
-                if (len1 == -1) return -1;
-
-                string remaining_text = text.substr(len1);
+            int group_len = match_recursive(group_content, text, group_count);
+            if (group_len != -1) {
+                // Capture the matched text
+                captured_groups[current_capture_index] = text.substr(0, group_len);
                 
-                // --- START OF THE CRITICAL FIX ---
-                // Path A (Greedy): Match the quantified group `(...)+` again on the remaining text.
-                // We use the substring of the original pattern that represents the quantified group.
-                string quantified_group_pattern = pattern.substr(0, end_paren_pos + 2);
-                int more_len = match_recursive(quantified_group_pattern, remaining_text);
-                if (more_len != -1) return len1 + more_len;
-                // --- END OF THE CRITICAL FIX ---
-
-                // Path B (Backtrack): Match the rest of the pattern that comes after the `+`.
-                int rest_len = match_recursive(after_group.substr(1), remaining_text);
-                if (rest_len != -1) return len1 + rest_len;
-                
-                return -1;
-            }
-
-            if (quantifier == '?') {
-                // Path A: Skip the group and match the rest.
-                int len_skipped = match_recursive(after_group.substr(1), text);
-                if (len_skipped != -1) return len_skipped;
-
-                // Path B: Match the group once, then match the rest.
-                int len_matched = match_recursive(group_content, text);
-                if (len_matched != -1) {
-                    int rest_len = match_recursive(after_group.substr(1), text.substr(len_matched));
-                    if (rest_len != -1) return len_matched + rest_len;
+                int rest_len = match_recursive(after_group, text.substr(group_len), group_count);
+                if (rest_len != -1) {
+                    return group_len + rest_len;
                 }
-                return -1;
             }
-            // If no quantifier, it's just a group: match its content then the rest.
-            return match_recursive(group_content + after_group, text);
+            // Backtrack: if the rest of the pattern failed, un-capture the group
+            captured_groups.erase(current_capture_index);
+            return -1;
         }
     }
 
@@ -111,15 +98,15 @@ int match_recursive(const string& pattern, const string& text) {
     if (pattern.length() > 1 && (pattern[1] == '?' || pattern[1] == '+')) {
         string rest = pattern.substr(2);
         if (pattern[1] == '?') {
-            int len = match_recursive(rest, text);
+            int len = match_recursive(rest, text, group_count);
             if (len != -1) return len;
         }
         if (!text.empty() && (pattern[0] == '.' || pattern[0] == text[0])) {
             if (pattern[1] == '+') {
-                int more_len = match_recursive(pattern, text.substr(1));
+                int more_len = match_recursive(pattern, text.substr(1), group_count);
                 if (more_len != -1) return 1 + more_len;
             }
-            int rest_len = match_recursive(rest, text.substr(1));
+            int rest_len = match_recursive(rest, text.substr(1), group_count);
             if (rest_len != -1) return 1 + rest_len;
         }
         return -1;
@@ -128,6 +115,22 @@ int match_recursive(const string& pattern, const string& text) {
     // Handle single "atom" matches
     if (text.empty()) return -1;
 
+    // --- START OF NEW CODE: Handle backreferences ---
+    if (pattern[0] == '\\' && pattern.length() > 1 && isdigit(pattern[1])) {
+        int group_num = pattern[1] - '0';
+        if (captured_groups.count(group_num)) {
+            string captured = captured_groups[group_num];
+            if (text.rfind(captured, 0) == 0) { // C++20 text.starts_with(captured)
+                int rest_len = match_recursive(pattern.substr(2), text.substr(captured.length()), group_count);
+                if (rest_len != -1) {
+                    return captured.length() + rest_len;
+                }
+            }
+        }
+        return -1;
+    }
+    // --- END OF NEW CODE ---
+
     if (pattern[0] == '[') {
         size_t end_bracket = pattern.find(']', 1);
         if (end_bracket != string::npos) {
@@ -135,7 +138,7 @@ int match_recursive(const string& pattern, const string& text) {
             string group = pattern.substr(is_negated ? 2 : 1, end_bracket - (is_negated ? 2 : 1));
             bool found = group.find(text[0]) != string::npos;
             if (is_negated != found) {
-                int len = match_recursive(pattern.substr(end_bracket + 1), text.substr(1));
+                int len = match_recursive(pattern.substr(end_bracket + 1), text.substr(1), group_count);
                 if (len != -1) return 1 + len;
             }
         }
@@ -144,14 +147,14 @@ int match_recursive(const string& pattern, const string& text) {
 
     if (pattern[0] == '\\' && pattern.length() > 1) {
         if ((pattern[1] == 'd' && isdigit(text[0])) || (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'))) {
-            int len = match_recursive(pattern.substr(2), text.substr(1));
+            int len = match_recursive(pattern.substr(2), text.substr(1), group_count);
             if (len != -1) return 1 + len;
         }
         return -1;
     }
 
     if (pattern[0] == '.' || pattern[0] == text[0]) {
-        int len = match_recursive(pattern.substr(1), text.substr(1));
+        int len = match_recursive(pattern.substr(1), text.substr(1), group_count);
         if (len != -1) return 1 + len;
     }
 
