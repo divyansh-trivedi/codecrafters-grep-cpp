@@ -74,34 +74,33 @@ int match_recursive(const string& pattern, const string& text) {
             // START OF CHANGE: Corrected logic for quantified groups
             // =================================================================
             if (quantifier == '+') {
-                // Must match the group content at least once.
                 int len1 = match_recursive(group_content, text);
-                if (len1 == -1) return -1;
+                if (len1 == -1) return -1; // Must match at least once
                 
-                string text_after_one_match = text.substr(len1);
-                string pattern_after_quantifier = after_group_pattern.substr(1);
+                string text_after_one = text.substr(len1);
+                string pattern_after_plus = after_group_pattern.substr(1);
 
-                // Path A: Match the rest of the pattern after the `+`.
-                int rest_len = match_recursive(pattern_after_quantifier, text_after_one_match);
+                // Path A: The '+' is done. Try to match the rest of the pattern.
+                int rest_len = match_recursive(pattern_after_plus, text_after_one);
                 if (rest_len != -1) return len1 + rest_len;
 
-                // Path B: Match the quantified group `(...)+` again.
-                int more_len = match_recursive(pattern.substr(0, end_paren_pos + 2), text_after_one_match);
+                // Path B: The '+' continues. Match the quantified group again on remaining text.
+                int more_len = match_recursive(pattern.substr(0, end_paren_pos + 2), text_after_one);
                 if (more_len != -1) return len1 + more_len;
-
-                return -1; // No path succeeded
+                
+                return -1;
             }
 
             if (quantifier == '?') {
-                // Path A: Skip the group and match the rest of the pattern.
-                int len = match_recursive(after_group_pattern.substr(1), text);
-                if (len != -1) return len;
+                // Path A: Skip the group and match the rest.
+                int len_skipped = match_recursive(after_group_pattern.substr(1), text);
+                if (len_skipped != -1) return len_skipped;
 
                 // Path B: Match the group once, then match the rest.
-                int len1 = match_recursive(group_content, text);
-                if (len1 != -1) {
-                    int len2 = match_recursive(after_group_pattern.substr(1), text.substr(len1));
-                    if (len2 != -1) return len1 + len2;
+                int len_matched = match_recursive(group_content, text);
+                if (len_matched != -1) {
+                    int rest_len = match_recursive(after_group_pattern.substr(1), text.substr(len_matched));
+                    if (rest_len != -1) return len_matched + rest_len;
                 }
                 return -1;
             }
@@ -114,7 +113,7 @@ int match_recursive(const string& pattern, const string& text) {
         }
     }
 
-    // Handle quantifiers for single characters/atoms
+    // Handle quantifiers for single characters
     if (pattern.length() > 1) {
         if (pattern[1] == '?') {
             int len = match_recursive(pattern.substr(2), text);
@@ -127,12 +126,10 @@ int match_recursive(const string& pattern, const string& text) {
         }
         if (pattern[1] == '+') {
             if (!text.empty() && (pattern[0] == '.' || pattern[0] == text[0])) {
-                // Path A: Match more of the same character
-                int len = match_recursive(pattern, text.substr(1));
-                if (len != -1) return 1 + len;
-                // Path B: Match the rest of the pattern
-                len = match_recursive(pattern.substr(2), text.substr(1));
-                if (len != -1) return 1 + len;
+                int len_more = match_recursive(pattern, text.substr(1));
+                if (len_more != -1) return 1 + len_more;
+                int len_rest = match_recursive(pattern.substr(2), text.substr(1));
+                if (len_rest != -1) return 1 + len_rest;
             }
             return -1;
         }
