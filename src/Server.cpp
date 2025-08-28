@@ -52,18 +52,14 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
             string left = pattern.substr(0, i);
             string right = pattern.substr(i + 1);
             
-            // --- START OF THE CRITICAL FIX ---
-            // Save the state before trying the left path
             int original_group_count = group_count;
             auto original_captures = captured_groups;
 
             int len = match_recursive(left, text, group_count);
             if (len != -1) return len;
 
-            // Restore the state before trying the right path
             group_count = original_group_count;
             captured_groups = original_captures;
-            // --- END OF THE CRITICAL FIX ---
 
             return match_recursive(right, text, group_count);
         }
@@ -94,18 +90,14 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
     string rest = pattern.substr(atom_len + (quantifier == '?' || quantifier == '+' ? 1 : 0));
 
     if (quantifier == '?') {
-        // --- START OF THE CRITICAL FIX ---
-        // Save state before trying the "skip" path
         int original_group_count = group_count;
         auto original_captures = captured_groups;
         
         int len = match_recursive(rest, text, group_count);
         if (len != -1) return len;
         
-        // Restore state before trying the "match" path
         group_count = original_group_count;
         captured_groups = original_captures;
-        // --- END OF THE CRITICAL FIX ---
 
         int atom_match_len = match_recursive(atom, text, group_count);
         if (atom_match_len != -1) {
@@ -121,18 +113,14 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
 
         string remaining_text = text.substr(atom_match_len);
         
-        // --- START OF THE CRITICAL FIX ---
-        // Save state before trying the greedy path
         int original_group_count = group_count;
         auto original_captures = captured_groups;
 
         int more_len = match_recursive(pattern.substr(0, atom_len + 1), remaining_text, group_count);
         if (more_len != -1) return atom_match_len + more_len;
 
-        // Restore state before trying the backtrack path
         group_count = original_group_count;
         captured_groups = original_captures;
-        // --- END OF THE CRITICAL FIX ---
 
         int rest_len = match_recursive(rest, remaining_text, group_count);
         if (rest_len != -1) return atom_match_len + rest_len;
