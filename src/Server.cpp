@@ -2,164 +2,119 @@
 #include <string>
 #include <vector>
 #include <cctype>
-#include <stdexcept>
-#include <filesystem>
-#include <fstream>
 
-// Forward declaration for the main recursive matching function
-bool match_here(const std::string& text, const std::string& regexp);
+using namespace std;
 
-// Helper function to handle the '+' quantifier
-bool match_plus(const std::string& text, char match_char, const std::string& regexp) {
-    std::string remaining_text = text;
-    while (!remaining_text.empty() && (remaining_text[0] == match_char || match_char == '.')) {
-        if (match_here(remaining_text.substr(1), regexp)) {
-            return true;
-        }
-        remaining_text = remaining_text.substr(1);
+// Check if text matches regexp starting here
+bool match_here(const string& text, const string& regexp);
+
+// Handle '+' quantifier: one or more matches of 'match' char or string then regexp
+bool match_plus(const string& text, const string& match, const string& regexp) {
+    size_t pos = 0;
+    while (pos < text.size() && text.compare(pos, match.size(), match) == 0) {
+        pos += match.size();
+        if (match_here(text.substr(pos), regexp)) return true;
     }
     return false;
 }
 
-// Helper function to handle the '?' quantifier
-bool match_question_mark(const std::string& text, char match_char, const std::string& regexp) {
-    if (!text.empty() && (text[0] == match_char || match_char == '.')) {
-        if (match_here(text.substr(1), regexp)) {
-            return true;
-        }
+// Handle '?' quantifier: zero or one match of 'match' char or string then regexp
+bool match_question_mark(const string& text, const string& match, const string& regexp) {
+    if (text.compare(0, match.size(), match) == 0) {
+        return match_here(text.substr(match.size()), regexp);
+    } else {
+        return match_here(text, regexp);
     }
-    return match_here(text, regexp);
 }
 
-// The core recursive matching engine
-bool match_here(const std::string& text, const std::string& regexp) {
-    if (regexp.empty()) {
-        return true;
+
+bool match_here(const string& text, const string& regexp) {
+    if (regexp.empty()) return true;
+    if (!text.empty() && regexp[0] == '$') return false;
+    if (regexp[0] == '$') return text.empty();
+
+    // Handle group alternation like (cat|dog)
+    if (!regexp.empty() && regexp[0] == '(' && regexp.back() == ')') {
+        string group = regexp.substr(1, regexp.size() - 2);
+        size_t pipe_pos = group.find('|');
+        if (pipe_pos != string::npos) {
+            string alt1 = group.substr(0, pipe_pos);
+            string alt2 = group.substr(pipe_pos + 1);
+            return match_here(text, alt1) || match_here(text, alt2);
+        } else {
+            // no alternation inside group
+            return match_here(text, group);
+        }
     }
-    if (regexp == "$") {
-        return text.empty();
+
+    // Handle quantifiers '+' and '?'
+    if (regexp.size() > 1) {
+        if (regexp[1] == '+') {
+            string match_str = regexp.substr(0,1);
+            return match_plus(text, match_str, regexp.substr(2));
+        }
+        if (regexp[1] == '?') {
+            string match_str = regexp.substr(0,1);
+            return match_question_mark(text, match_str, regexp.substr(2));
+        }
     }
-    if (regexp.length() > 1 && regexp[1] == '?') {
-        return match_question_mark(text, regexp[0], regexp.substr(2));
-    }
-    if (regexp.length() > 1 && regexp[1] == '+') {
-        return !text.empty() && (text[0] == regexp[0] || regexp[0] == '.') && match_plus(text.substr(1), regexp[0], regexp.substr(2));
-    }
-    if (text.empty()) {
+
+    // Escapes \d and \w
+    if (regexp.size() >= 2 && regexp.substr(0,2) == "\\d") {
+        if (!text.empty() && isdigit(text[0]))
+            return match_here(text.substr(1), regexp.substr(2));
         return false;
     }
-    if (regexp[0] == '.') {
+    if (regexp.size() >= 2 && regexp.substr(0,2) == "\\w") {
+        if (!text.empty() && (isalnum(text[0]) || text[0] == '_'))
+            return match_here(text.substr(1), regexp.substr(2));
+        return false;
+    }
+
+    // '.' matches any single character
+    if (!regexp.empty() && regexp[0] == '.') {
+        if (!text.empty())
+            return match_here(text.substr(1), regexp.substr(1));
+        return false;
+    }
+
+    // Literal character match
+    if (!regexp.empty() && !text.empty() && regexp[0] == text[0]) {
         return match_here(text.substr(1), regexp.substr(1));
     }
-    if (regexp.length() >= 2 && regexp.substr(0, 2) == "\\d") {
-        if (isdigit(text[0])) {
-            return match_here(text.substr(1), regexp.substr(2));
-        }
-        return false;
-    }
-    if (regexp.length() >= 2 && regexp.substr(0, 2) == "\\w") {
-        if (isalnum(text[0])) {
-            return match_here(text.substr(1), regexp.substr(2));
-        }
-        return false;
-    }
-    if (regexp[0] == '(' && regexp.back() == ')') {
-        std::string content = regexp.substr(1, regexp.length() - 2);
-        size_t pipe_pos = content.find('|');
-        if (pipe_pos != std::string::npos) {
-            std::string left = content.substr(0, pipe_pos);
-            std::string right = content.substr(pipe_pos + 1);
-            return match_here(text, left) || match_here(text, right);
-        }
-    }
-    if (regexp[0] == text[0]) {
-        return match_here(text.substr(1), regexp.substr(1));
-    }
+
     return false;
 }
 
-// The main entry point for matching logic
-bool match_pattern(const std::string& input_line, const std::string& pattern) {
-    if (pattern.length() >= 2 && pattern.front() == '[' && pattern.back() == ']') {
-        std::string content = pattern.substr(1, pattern.length() - 2);
-        bool negated = false;
-        if (!content.empty() && content[0] == '^') {
-            negated = true;
-            content = content.substr(1);
-        }
-        for (char c : input_line) {
-            bool found = (content.find(c) != std::string::npos);
-            if (negated && !found) return true;
-            if (!negated && found) return true;
-        }
-        return false;
-    }
+bool match_pattern(const string& input_line, const string& pattern) {
     if (!pattern.empty() && pattern[0] == '^') {
         return match_here(input_line, pattern.substr(1));
     }
-    std::string text = input_line;
-    while (!text.empty()) {
-        if (match_here(text, pattern)) {
-            return true;
-        }
-        text = text.substr(1);
+    for (size_t i = 0; i < input_line.size(); i++) {
+        if (match_here(input_line.substr(i), pattern)) return true;
     }
-    // Handle empty input matching empty pattern or specific patterns like '$'
-    if (input_line.empty()) {
-        return match_here("", pattern);
-    }
-
     return false;
 }
 
+
 int main(int argc, char* argv[]) {
-    // Ensure immediate output
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
-
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " -E <pattern> [file...]" << std::endl;
+    if (argc != 3) {
+        cerr << "Expected two arguments" << endl;
+        return 1;
+    }
+    if (string(argv[1]) != "-E") {
+        cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
 
-    if (std::string(argv[1]) != "-E") {
-        std::cerr << "Expected first argument to be '-E'" << std::endl;
+    string input_line;
+    getline(cin, input_line);
+
+    string pattern = argv[2];
+
+    if (match_pattern(input_line, pattern)) {
+        return 0;
+    } else {
         return 1;
     }
-
-    std::string pattern = argv[2];
-    
-    // If no files are provided, read from stdin
-    if (argc == 3) {
-        std::string input_line;
-        if (std::getline(std::cin, input_line)) {
-            if (match_pattern(input_line, pattern)) {
-                return 0; // Match found
-            }
-        }
-        return 1; // No match
-    }
-
-    // Process files
-    bool any_match = false;
-    for (int i = 3; i < argc; ++i) {
-        std::ifstream file(argv[i]);
-        if (!file.is_open()) {
-            std::cerr << "Error opening file: " << argv[i] << std::endl;
-            continue;
-        }
-        std::string line;
-        while (std::getline(file, line)) {
-            if (match_pattern(line, pattern)) {
-                any_match = true;
-                if (argc > 4) { // Print filename if more than one file
-                    std::cout << argv[i] << ":" << line << std::endl;
-                } else {
-                    std::cout << line << std::endl;
-                }
-            }
-        }
-    }
-
-    return any_match ? 0 : 1;
 }
