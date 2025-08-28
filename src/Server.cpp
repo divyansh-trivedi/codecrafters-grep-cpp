@@ -3,47 +3,28 @@ using namespace std;
 
 bool matchHere(const string &pattern, const string &text);
 
-bool matchChar(char pc, char tc) {
-    return pc == '.' || pc == tc;
-}
+bool isDigit(char c) { return c >= '0' && c <= '9'; }
+bool isSpace(char c) { return c == ' ' || c == '\t'; }
+bool isWord(char c) { return isalnum(c) || c == '_'; }
 
-// Try to match an expression with * or + repetition
-bool repeatMatch(const string &inside, const string &after, const string &text, bool atLeastOnce) {
-    // Try matching the inside group multiple times
-    if (atLeastOnce) {
-        // must match once
-        for (size_t i = 0; i <= text.size(); i++) {
-            if (matchHere(inside, text.substr(0, i))) {
-                string rest = text.substr(i);
-                // option 1: match more
-                if (repeatMatch(inside, after, rest, false)) return true;
-                // option 2: stop and continue
-                if (matchHere(after, rest)) return true;
-            }
-        }
-        return false;
-    } else {
-        // zero or more
-        // try consuming 0 chars
-        if (matchHere(after, text)) return true;
-        // try consuming more
-        for (size_t i = 0; i <= text.size(); i++) {
-            if (matchHere(inside, text.substr(0, i))) {
-                if (repeatMatch(inside, after, text.substr(i), false)) return true;
-            }
-        }
-        return false;
+bool matchChar(const string &p, int &i, char tc) {
+    if (p[i] == '.') return true;
+    if (p[i] == '\\') {
+        i++;
+        if (i >= (int)p.size()) return false;
+        if (p[i] == 'd') return isDigit(tc);
+        if (p[i] == 's') return isSpace(tc);
+        if (p[i] == 'w') return isWord(tc);
+        return p[i] == tc; // literal escape
     }
+    return p[i] == tc;
 }
 
-// Main matcher
 bool matchHere(const string &pattern, const string &text) {
     if (pattern.empty()) return text.empty();
-
-    // Handle $
     if (pattern == "$") return text.empty();
 
-    // Handle group ( ... )
+    // Group handling
     if (pattern[0] == '(') {
         int depth = 0, j = 0;
         for (; j < (int)pattern.size(); j++) {
@@ -56,7 +37,7 @@ bool matchHere(const string &pattern, const string &text) {
         string inside = pattern.substr(1, j - 1);
         string after = (j + 1 < pattern.size() ? pattern.substr(j + 1) : "");
 
-        // Handle alternation
+        // Split alternation
         vector<string> alts;
         {
             int d = 0; string cur;
@@ -66,9 +47,7 @@ bool matchHere(const string &pattern, const string &text) {
                 if (c == '|' && d == 0) {
                     alts.push_back(cur);
                     cur.clear();
-                } else {
-                    cur.push_back(c);
-                }
+                } else cur.push_back(c);
             }
             alts.push_back(cur);
         }
@@ -79,49 +58,49 @@ bool matchHere(const string &pattern, const string &text) {
             after = after.substr(1);
         }
 
-        if (quant == '?') {
-            // try with group or without
-            for (auto &alt : alts) {
+        for (auto &alt : alts) {
+            if (quant == '?') {
+                // try with or without
+                for (size_t k = 0; k <= text.size(); k++) {
+                    if (matchHere(alt, text.substr(0, k)) && matchHere(after, text.substr(k)))
+                        return true;
+                }
+                if (matchHere(after, text)) return true;
+            } else if (quant == '*' || quant == '+') {
+                int minRep = (quant == '+') ? 1 : 0;
+                // greedy repetition with backtracking
+                function<bool(int,int)> dfs = [&](int start, int rep) {
+                    if (rep >= minRep && matchHere(after, text.substr(start))) return true;
+                    for (int k = start + 1; k <= (int)text.size(); k++) {
+                        if (matchHere(alt, text.substr(start, k - start))) {
+                            if (dfs(k, rep + 1)) return true;
+                        }
+                    }
+                    return false;
+                };
+                if (dfs(0, 0)) return true;
+            } else {
+                // no quantifier
                 for (size_t k = 0; k <= text.size(); k++) {
                     if (matchHere(alt, text.substr(0, k)) && matchHere(after, text.substr(k)))
                         return true;
                 }
             }
-            return matchHere(after, text);
         }
-        else if (quant == '*') {
-            for (auto &alt : alts) {
-                if (repeatMatch(alt, after, text, false)) return true;
-            }
-            return false;
-        }
-        else if (quant == '+') {
-            for (auto &alt : alts) {
-                if (repeatMatch(alt, after, text, true)) return true;
-            }
-            return false;
-        } else {
-            // no quantifier, must match once
-            for (auto &alt : alts) {
-                for (size_t k = 0; k <= text.size(); k++) {
-                    if (matchHere(alt, text.substr(0, k)) &&
-                        matchHere(after, text.substr(k))) return true;
-                }
-            }
-            return false;
-        }
+        return false;
     }
 
-    // Handle ^ anchor
-    if (pattern[0] == '^') {
+    // ^ anchor
+    if (pattern[0] == '^')
         return matchHere(pattern.substr(1), text);
-    }
 
-    // Match first char
-    if (!text.empty() && matchChar(pattern[0], text[0])) {
-        return matchHere(pattern.substr(1), text.substr(1));
+    // Normal char
+    if (!text.empty()) {
+        int i = 0;
+        if (matchChar(pattern, i, text[0])) {
+            return matchHere(pattern.substr(i + 1), text.substr(1));
+        }
     }
-
     return false;
 }
 
