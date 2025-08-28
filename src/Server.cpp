@@ -1,23 +1,22 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-// Forward declarations
 bool matchRegex(const string &pattern, const string &text);
 bool matchHere(const string &pattern, const string &text);
 
-// Utility: check if char is digit
+// utility
 bool isDigit(char c) {
     return c >= '0' && c <= '9';
 }
 
-// Split group contents by '|' at top level
+// split a group by top-level '|'
 vector<string> splitAlternatives(const string &s) {
     vector<string> parts;
     string cur;
     int depth = 0;
     for (char c : s) {
         if (c == '(') depth++;
-        if (c == ')') depth--;
+        else if (c == ')') depth--;
         if (c == '|' && depth == 0) {
             parts.push_back(cur);
             cur.clear();
@@ -29,7 +28,6 @@ vector<string> splitAlternatives(const string &s) {
     return parts;
 }
 
-// Match with anchors
 bool matchRegex(const string &pattern, const string &text) {
     if (!pattern.empty() && pattern[0] == '^') {
         return matchHere(pattern.substr(1), text);
@@ -40,12 +38,11 @@ bool matchRegex(const string &pattern, const string &text) {
     return false;
 }
 
-// Recursive matcher
 bool matchHere(const string &pattern, const string &text) {
     if (pattern.empty()) return true;
     if (pattern == "$") return text.empty();
 
-    // Handle groups ( ... )
+    // group (...)
     if (pattern[0] == '(') {
         int depth = 0;
         size_t i = 0;
@@ -56,8 +53,7 @@ bool matchHere(const string &pattern, const string &text) {
                 if (depth == 0) break;
             }
         }
-        if (depth != 0) return false; // unbalanced parentheses
-
+        if (depth != 0) return false; // unbalanced
         string inside = pattern.substr(1, i - 1);
         string after = (i + 1 < pattern.size()) ? pattern.substr(i + 1) : "";
 
@@ -72,17 +68,20 @@ bool matchHere(const string &pattern, const string &text) {
         if (quant == '+') {
             // must match at least once
             for (auto &alt : alternatives) {
-                if (matchHere(alt + after, text)) return true;
-                for (size_t k = 1; k <= text.size(); k++) {
-                    if (matchHere(alt, text.substr(0, k)) &&
-                        matchHere("(" + inside + ")+" + after, text.substr(k)))
-                        return true;
+                // try all prefixes of text that match alt
+                for (size_t k = 0; k <= text.size(); k++) {
+                    if (matchHere(alt, text.substr(0, k))) {
+                        // after first match, either continue group+ or move to after
+                        if (matchHere("(" + inside + ")+" + after, text.substr(k)))
+                            return true;
+                        if (matchHere(after, text.substr(k)))
+                            return true;
+                    }
                 }
             }
             return false;
         } else if (quant == '?') {
             // 0 or 1 times
-            // Try matching once
             for (auto &alt : alternatives) {
                 for (size_t k = 0; k <= text.size(); k++) {
                     if (matchHere(alt, text.substr(0, k)) &&
@@ -90,10 +89,10 @@ bool matchHere(const string &pattern, const string &text) {
                         return true;
                 }
             }
-            // Or skip
+            // skip
             return matchHere(after, text);
         } else {
-            // Plain group
+            // plain group
             for (auto &alt : alternatives) {
                 for (size_t k = 0; k <= text.size(); k++) {
                     if (matchHere(alt, text.substr(0, k)) &&
@@ -105,7 +104,7 @@ bool matchHere(const string &pattern, const string &text) {
         }
     }
 
-    // Handle escape \d
+    // escape \d
     if (pattern.size() >= 2 && pattern[0] == '\\' && pattern[1] == 'd') {
         if (!text.empty() && isDigit(text[0])) {
             return matchHere(pattern.substr(2), text.substr(1));
@@ -113,13 +112,13 @@ bool matchHere(const string &pattern, const string &text) {
         return false;
     }
 
-    // Handle dot
+    // dot
     if (pattern[0] == '.') {
         if (!text.empty()) return matchHere(pattern.substr(1), text.substr(1));
         return false;
     }
 
-    // Normal character
+    // literal char
     if (!text.empty() && pattern[0] == text[0]) {
         return matchHere(pattern.substr(1), text.substr(1));
     }
