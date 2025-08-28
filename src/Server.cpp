@@ -26,7 +26,7 @@ bool match_pattern(const string& input_line, const string& pattern) {
     return false;
 }
 
-// This is the core recursive engine with all features.
+// The core recursive engine. This function definition was likely missing from your file.
 bool match_here(const string& pattern, size_t pattern_idx, const string& text, size_t text_idx) {
     // Base Case: If we've successfully consumed the entire pattern, we have a match.
     if (pattern_idx == pattern.size()) {
@@ -38,7 +38,7 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
         return text_idx == text.size();
     }
 
-    // Handle grouping `()` with alternation `|`. This is a complex case.
+    // Handle grouping `()` with alternation `|`. This must be checked before single-char quantifiers.
     if (pattern[pattern_idx] == '(') {
         size_t pipe_pos = string::npos;
         size_t end_paren_pos = string::npos;
@@ -58,19 +58,6 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
 
         if (end_paren_pos != string::npos) {
             string after_group = pattern.substr(end_paren_pos + 1);
-            char quantifier = after_group.empty() ? 0 : after_group[0];
-
-            // Handle quantified groups: (...)? and (...)+
-            if (quantifier == '?') {
-                string group_content = pattern.substr(pattern_idx + 1, end_paren_pos - (pattern_idx + 1));
-                return match_here(after_group.substr(1), text, text_idx) ||
-                       (match_here(group_content, 0, text, text_idx) && 
-                        match_here(after_group.substr(1), text, text.size())); // Incorrect text index, needs match length
-            }
-             if (quantifier == '+') {
-                 // To handle this properly, the function needs to return the length of the match.
-                 // This is a significant rewrite. Let's use a simpler, correct string-building approach.
-             }
 
             // Handle alternation (A|B)
             if (pipe_pos != string::npos && pipe_pos < end_paren_pos) {
@@ -86,7 +73,6 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
             }
         }
     }
-
 
     // This logic handles a single character/unit followed by a quantifier
     if (pattern_idx + 1 < pattern.size()) {
@@ -139,25 +125,34 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
     return false;
 }
 
-// The main function remains unchanged
 int main(int argc, char* argv[]) {
     cout << unitbuf;
     cerr << unitbuf;
+
     if (argc != 3) {
         cerr << "Expected two arguments" << endl;
         return 1;
     }
+
     string flag = argv[1];
     string pattern = argv[2];
+
     if (flag != "-E") {
         cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
+
     string input_line;
     getline(cin, input_line);
-    if (match_pattern(input_line, pattern)) {
-        return 0;
-    } else {
+
+    try {
+        if (match_pattern(input_line, pattern)) {
+            return 0;
+        } else {
+            return 1;
+        }
+    } catch (const runtime_error& e) {
+        cerr << e.what() << endl;
         return 1;
     }
 }
