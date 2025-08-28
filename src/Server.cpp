@@ -10,6 +10,25 @@ bool isDigit(char c) {
     return c >= '0' && c <= '9';
 }
 
+// Split group contents by '|' at top level
+vector<string> splitAlternatives(const string &s) {
+    vector<string> parts;
+    string cur;
+    int depth = 0;
+    for (char c : s) {
+        if (c == '(') depth++;
+        if (c == ')') depth--;
+        if (c == '|' && depth == 0) {
+            parts.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    parts.push_back(cur);
+    return parts;
+}
+
 // Match with anchors
 bool matchRegex(const string &pattern, const string &text) {
     if (!pattern.empty() && pattern[0] == '^') {
@@ -37,7 +56,7 @@ bool matchHere(const string &pattern, const string &text) {
                 if (depth == 0) break;
             }
         }
-        if (depth != 0) return false; // no closing ')'
+        if (depth != 0) return false; // unbalanced parentheses
 
         string inside = pattern.substr(1, i - 1);
         string after = (i + 1 < pattern.size()) ? pattern.substr(i + 1) : "";
@@ -48,41 +67,39 @@ bool matchHere(const string &pattern, const string &text) {
             after = after.substr(1);
         }
 
+        vector<string> alternatives = splitAlternatives(inside);
+
         if (quant == '+') {
             // must match at least once
-            size_t consumed = 0;
-            if (!matchHere(inside + "#", text + "#")) return false;
-
-            // Try to consume repeatedly
-            string rest = text;
-            while (matchHere(inside + "#", rest + "#")) {
-                // Remove matched part (brute force)
-                for (size_t k = 1; k <= rest.size(); k++) {
-                    if (matchHere(inside, rest.substr(0, k))) {
-                        rest = rest.substr(k);
-                        goto matched_group;
-                    }
+            for (auto &alt : alternatives) {
+                if (matchHere(alt + after, text)) return true;
+                for (size_t k = 1; k <= text.size(); k++) {
+                    if (matchHere(alt, text.substr(0, k)) &&
+                        matchHere("(" + inside + ")+" + after, text.substr(k)))
+                        return true;
                 }
-                break;
-                matched_group:;
             }
-            return matchHere(after, rest);
+            return false;
         } else if (quant == '?') {
             // 0 or 1 times
             // Try matching once
-            for (size_t k = 0; k <= text.size(); k++) {
-                if (matchHere(inside, text.substr(0, k)) &&
-                    matchHere(after, text.substr(k)))
-                    return true;
+            for (auto &alt : alternatives) {
+                for (size_t k = 0; k <= text.size(); k++) {
+                    if (matchHere(alt, text.substr(0, k)) &&
+                        matchHere(after, text.substr(k)))
+                        return true;
+                }
             }
-            // Or skip group
+            // Or skip
             return matchHere(after, text);
         } else {
             // Plain group
-            for (size_t k = 0; k <= text.size(); k++) {
-                if (matchHere(inside, text.substr(0, k)) &&
-                    matchHere(after, text.substr(k)))
-                    return true;
+            for (auto &alt : alternatives) {
+                for (size_t k = 0; k <= text.size(); k++) {
+                    if (matchHere(alt, text.substr(0, k)) &&
+                        matchHere(after, text.substr(k)))
+                        return true;
+                }
             }
             return false;
         }
