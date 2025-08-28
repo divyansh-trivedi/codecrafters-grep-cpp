@@ -1,265 +1,217 @@
-#include <algorithm>
-#include <cassert>
-#include <functional>
 #include <iostream>
-#include <ranges>
-#include <span>
 #include <string>
-#include <unordered_map>
-#include <utility>
 #include <vector>
-int captured_group_count = 0;
-std::unordered_map<int, std::string_view> captured_group_match;
+#include <cctype>
+#include <stdexcept>
+#include <unordered_map>
 
-std::size_t match_single_char(std::string_view input_line, char pattern) {
-    return static_cast<std::size_t>(input_line[0] == pattern);
-}
-std::size_t match_digit(std::string_view input_line) {
-    return static_cast<std::size_t>(std::ranges::find_if(input_line, isdigit) == input_line.begin());
-}
-std::size_t match_alphanum(std::string_view input_line) {
-    return static_cast<std::size_t>(std::ranges::find_if(input_line, isalnum) == input_line.begin());
-}
+using namespace std;
 
-std::size_t match_group(std::string_view input_line, std::string_view pattern) {
-    if (pattern[0] == '^') return static_cast<std::size_t>(input_line.find_first_not_of(pattern.substr(1)) == 0);
-    return static_cast<std::size_t>(input_line.find_first_of(pattern) == 0);
-}
+// --- Global state for captured groups ---
+// Note: In a more advanced engine, this would not be global.
+unordered_map<int, string> captured_groups;
+int capture_group_counter = 0;
 
-std::size_t match_backreference(std::string_view input_line, int group_id) {
-    if (!captured_group_match.contains(group_id)) return 0;
-    if (input_line.starts_with(captured_group_match[group_id])) return captured_group_match[group_id].size();
-    return 0;
-}
 
-enum class TokenType { character, digit, alphnum, wildcard, backreference, group, parenthesis, pattern };
-std::string_view type_to_str(TokenType type) {
-    switch (type) {
-        case TokenType::character:
-            return "character";
-        case TokenType::digit:
-            return "digit";
-        case TokenType::alphnum:
-            return "alphnum";
-        case TokenType::wildcard:
-            return "wildcard";
-        case TokenType::backreference:
-            return "backreference";
-        case TokenType::group:
-            return "group";
-        case TokenType::parenthesis:
-            return "parenthesis";
-        case TokenType::pattern:
-            return "pattern";
+// --- Forward Declarations ---
+int match_recursive(const string& pattern, const string& text);
+
+
+// --- Main Entry Point ---
+bool match_pattern(const string& input_line, const string& pattern) {
+    if (pattern.empty()) return true;
+
+    if (pattern[0] == '^') {
+        // For an anchored pattern, the match must consume the entire line.
+        return match_recursive(pattern.substr(1), input_line) == (int)input_line.length();
     }
-    std::unreachable();
-}
 
-class Token {
-   private:
-    const TokenType m_type;
-    const std::string_view m_pattern;
-    int captured_group_idx{0};
-    std::vector<Token> subtokens{};
-    bool one_or_more{false};
-    bool zero_or_one{false};
-
-   public:
-    Token(const TokenType type, const std::string_view pattern, int captured_group_idx = 0)
-        : m_type{type}, m_pattern{pattern}, captured_group_idx{captured_group_idx} {
-        if (type == TokenType::parenthesis) {
-            using namespace std::literals;
-            for (const auto word : std::views::split(pattern, "|"sv)) {
-                std::cout << "hello " << std::string_view(word) << std::endl;
-                subtokens.push_back(Token(TokenType::pattern, std::string_view(word)));
-            }
+    // For unanchored patterns, loop and try to match at every position.
+    for (size_t i = 0; i <= input_line.length(); ++i) {
+        captured_groups.clear(); // Reset captures for each new starting position
+        if (match_recursive(pattern, input_line.substr(i)) != -1) {
+            return true;
         }
-        if (type == TokenType::pattern) {
-            std::string_view local_pattern{pattern};
-            while (local_pattern.size()) {
-                if (local_pattern.starts_with("\\d")) {
-                    subtokens.push_back(Token(TokenType::digit, "\\d"));
-                    local_pattern = local_pattern.substr(2);
-                } else if (local_pattern.starts_with("\\w")) {
-                    subtokens.push_back(Token(TokenType::alphnum, "\\w"));
-                    local_pattern = local_pattern.substr(2);
-                } else if (local_pattern.starts_with(".")) {
-                    subtokens.push_back(Token(TokenType::wildcard, "."));
-                    local_pattern = local_pattern.substr(1);
-                } else if (local_pattern.starts_with("[")) {
-                    const auto end = local_pattern.find("]");
-                    subtokens.push_back(Token(TokenType::group, local_pattern.substr(1, end - 1)));
-                    local_pattern = local_pattern.substr(end + 1);
-                } else if (local_pattern.starts_with("(")) {
-                    const auto end = local_pattern.find(")");
-                    subtokens.push_back(
-                        Token(TokenType::parenthesis, local_pattern.substr(1, end - 1), ++captured_group_count));
-                    local_pattern = local_pattern.substr(end + 1);
-                } else if (local_pattern.starts_with("\\") && isdigit(local_pattern[1])) {
-                    subtokens.push_back(
-                        Token(TokenType::backreference, local_pattern.substr(0, 2), local_pattern[1] - '0'));
-                    local_pattern = local_pattern.substr(2);
-                } else if (local_pattern.starts_with("?")) {
-                    assert(subtokens.size());
-                    subtokens.back().set_zero_or_one(true);
-                    local_pattern = local_pattern.substr(1);
-                } else if (local_pattern.starts_with("+")) {
-                    assert(subtokens.size());
-                    subtokens.back().set_one_or_more(true);
-                    local_pattern = local_pattern.substr(1);
-                } else {
-                    subtokens.push_back(Token(TokenType::character, local_pattern.substr(0, 1)));
-                    local_pattern = local_pattern.substr(1);
-                }
-            }
-        }
-    }
-
-    TokenType type() const {
-        return m_type;
-    }
-
-    std::string_view pattern() const {
-        return m_pattern;
-    }
-
-    void set_one_or_more(bool x) {
-        one_or_more = x;
-    }
-    void set_zero_or_one(bool x) {
-        zero_or_one = x;
-    }
-
-    std::vector<std::size_t> match_sizes(std::string_view input) const {
-        std::vector<std::size_t> res;
-        if (zero_or_one) res.push_back(0);
-        if (m_type == TokenType::pattern) {
-            std::vector<std::size_t> current_match_sizes{0};
-            for (const auto& tok : subtokens) {
-                std::vector<std::size_t> next_match_sizes{};
-                for (auto dim : current_match_sizes) {
-                    auto add = tok.match_sizes(input.substr(dim));
-                    for (auto& x : add) x += dim;
-                    next_match_sizes.insert(next_match_sizes.end(), add.begin(), add.end());
-                }
-                current_match_sizes = std::move(next_match_sizes);
-            }
-            return current_match_sizes;
-        }
-        if (m_type == TokenType::parenthesis) {
-            std::vector<std::size_t> current_match_sizes{};
-            for (const auto& tok : subtokens) {
-                const auto add = tok.match_sizes(input);
-                current_match_sizes.insert(current_match_sizes.end(), add.begin(), add.end());
-            }
-            std::ranges::sort(current_match_sizes);
-            current_match_sizes.resize(std::unique(current_match_sizes.begin(), current_match_sizes.end()) -
-                                       current_match_sizes.begin());
-
-            if (!current_match_sizes.empty()) {
-                captured_group_match[captured_group_idx] = input.substr(0, current_match_sizes.back());
-            }
-            return current_match_sizes;
-        }
-
-        std::size_t current_match_size{0};
-        while (input.size()) {
-            std::size_t len{0};
-            switch (m_type) {
-                case TokenType::character:
-                    len = match_single_char(input, m_pattern[0]);
-                    break;
-                case TokenType::digit:
-                    len = match_digit(input);
-                    break;
-                case TokenType::alphnum:
-                    len = match_alphanum(input);
-                    break;
-                case TokenType::wildcard:
-                    len = 1;
-                    break;
-                case TokenType::backreference:
-                    len = match_backreference(input, captured_group_idx);
-                    break;
-                case TokenType::group:
-                    len = match_group(input, m_pattern);
-                    break;
-            }
-            if (len) {
-                current_match_size += len;
-                res.push_back(current_match_size);
-                input = input.substr(len);
-            } else {
-                break;
-            }
-            if (!one_or_more) break;
-        }
-        if (input.empty() && m_pattern == "$") {
-            res.push_back(current_match_size);
-        }
-        return res;
-    }
-    friend std::ostream& operator<<(std::ostream& o, const Token& t) {
-        o << type_to_str(t.m_type) << " :{";
-        for (auto x : t.subtokens) {
-            o << x << ",";
-        }
-        o << "}";
-        return o;
-    }
-};
-
-bool match_pattern_start(std::string_view input_line, std::span<Token> tokens) {
-    if (tokens.empty()) return true;
-    if (input_line.empty()) return tokens.size() == 1 && tokens[0].pattern() == "$";
-    std::vector<std::size_t> match_sizes{tokens[0].match_sizes(input_line)};
-    for (const auto dim : match_sizes) {
-        if (match_pattern_start(input_line.substr(dim), tokens.subspan(1))) return true;
     }
     return false;
 }
-bool match_pattern(std::string_view input_line, std::string_view pattern) {
-    bool line_start = pattern[0] == '^';
-    if (line_start) pattern = pattern.substr(1);
-    Token parser(TokenType::pattern, pattern);
-    std::cout << parser << std::endl;
-    if (line_start) return !parser.match_sizes(input_line).empty();
-    for (int i = 0; i < input_line.size(); i++) {
-        if (!parser.match_sizes(input_line.substr(i)).empty()) return true;
+
+
+// --- The Core Recursive Engine ---
+// Returns the length of the matched text, or -1 on failure.
+int match_recursive(const string& pattern, const string& text) {
+    // Base Case: An empty pattern successfully matches 0 characters.
+    if (pattern.empty()) return 0;
+
+    // Handle '$' anchor (end of string)
+    if (pattern[0] == '$' && pattern.length() == 1) {
+        return text.empty() ? 0 : -1;
     }
-    return false;
+
+    // Handle top-level alternation (e.g., "cat|dog")
+    int depth = 0;
+    for (int i = pattern.length() - 1; i >= 0; --i) {
+        if (pattern[i] == ')') depth++;
+        else if (pattern[i] == '(') depth--;
+        else if (pattern[i] == '|' && depth == 0) {
+            string left = pattern.substr(0, i);
+            string right = pattern.substr(i + 1);
+            int len = match_recursive(left, text);
+            if (len != -1) return len;
+            return match_recursive(right, text);
+        }
+    }
+
+    // Handle groups `()`
+    if (pattern[0] == '(') {
+        int level = 0;
+        size_t end_paren_pos = string::npos;
+        for (size_t i = 1; i < pattern.length(); ++i) {
+            if (pattern[i] == '(') level++;
+            else if (pattern[i] == ')') {
+                if (level-- == 0) {
+                    end_paren_pos = i;
+                    break;
+                }
+            }
+        }
+
+        if (end_paren_pos != string::npos) {
+            string group_content = pattern.substr(1, end_paren_pos - 1);
+            string after_group = pattern.substr(end_paren_pos + 1);
+            char quantifier = after_group.empty() ? 0 : after_group[0];
+
+            // This is a capturing group
+            int current_capture_index = ++capture_group_counter;
+
+            if (quantifier == '+') {
+                int len1 = match_recursive(group_content, text);
+                if (len1 == -1) return -1; // Must match at least once
+
+                captured_groups[current_capture_index] = text.substr(0, len1);
+                string remaining_text = text.substr(len1);
+                string rest_of_pattern = after_group.substr(1);
+                
+                // Path A (Greedy): Try to match the original full pattern again.
+                int more_len = match_recursive(pattern, remaining_text);
+                if (more_len != -1) return len1 + more_len;
+
+                // Path B (Backtrack): Try to match the rest of the pattern after the `+`.
+                int rest_len = match_recursive(rest_of_pattern, remaining_text);
+                if (rest_len != -1) return len1 + rest_len;
+                
+                return -1;
+            }
+
+            if (quantifier == '?') {
+                string rest = after_group.substr(1);
+                // Path A (skip group): Try matching the rest of the pattern.
+                int len = match_recursive(rest, text);
+                if (len != -1) return len;
+
+                // Path B (match group): Match the group, then the rest.
+                int group_len = match_recursive(group_content, text);
+                if (group_len != -1) {
+                    captured_groups[current_capture_index] = text.substr(0, group_len);
+                    int rest_len = match_recursive(rest, text.substr(group_len));
+                    if (rest_len != -1) return group_len + rest_len;
+                }
+                return -1;
+            }
+            
+            // If no quantifier, it's a simple capturing group.
+            int group_len = match_recursive(group_content, text);
+            if (group_len != -1) {
+                captured_groups[current_capture_index] = text.substr(0, group_len);
+                int rest_len = match_recursive(after_group, text.substr(group_len));
+                if (rest_len != -1) return group_len + rest_len;
+            }
+            return -1;
+        }
+    }
+
+    // Handle quantifiers for single characters
+    if (pattern.length() > 1 && (pattern[1] == '?' || pattern[1] == '+')) {
+        string rest = pattern.substr(2);
+        if (pattern[1] == '?') {
+            int len = match_recursive(rest, text);
+            if (len != -1) return len;
+        }
+        if (!text.empty() && (pattern[0] == '.' || pattern[0] == text[0])) {
+            if (pattern[1] == '+') {
+                int more_len = match_recursive(pattern, text.substr(1));
+                if (more_len != -1) return 1 + more_len;
+            }
+            int rest_len = match_recursive(rest, text.substr(1));
+            if (rest_len != -1) return 1 + rest_len;
+        }
+        return -1;
+    }
+    
+    // Handle single "atom" matches
+    if (text.empty()) return -1;
+
+    // Handle backreferences
+    if (pattern[0] == '\\' && pattern.length() > 1 && isdigit(pattern[1])) {
+        int group_num = pattern[1] - '0';
+        if (captured_groups.count(group_num)) {
+            string captured = captured_groups[group_num];
+            if (text.rfind(captured, 0) == 0) { // starts_with
+                int rest_len = match_recursive(pattern.substr(2), text.substr(captured.length()));
+                if (rest_len != -1) return captured.length() + rest_len;
+            }
+        }
+        return -1;
+    }
+
+    if (pattern[0] == '[') {
+        size_t end_bracket = pattern.find(']', 1);
+        if (end_bracket != string::npos) {
+            bool is_negated = pattern[1] == '^';
+            string group = pattern.substr(is_negated ? 2 : 1, end_bracket - (is_negated ? 2 : 1));
+            bool found = group.find(text[0]) != string::npos;
+            if (is_negated != found) {
+                int len = match_recursive(pattern.substr(end_bracket + 1), text.substr(1));
+                if (len != -1) return 1 + len;
+            }
+        }
+        return -1;
+    }
+
+    if (pattern[0] == '\\' && pattern.length() > 1) {
+        if ((pattern[1] == 'd' && isdigit(text[0])) || (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'))) {
+            int len = match_recursive(pattern.substr(2), text.substr(1));
+            if (len != -1) return 1 + len;
+        }
+        return -1;
+    }
+
+    if (pattern[0] == '.' || pattern[0] == text[0]) {
+        int len = match_recursive(pattern.substr(1), text.substr(1));
+        if (len != -1) return 1 + len;
+    }
+
+    return -1;
 }
 
 int main(int argc, char* argv[]) {
-    // Flush after every std::cout / std::cerr
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
+    cout << unitbuf;
+    cerr << unitbuf;
     if (argc != 3) {
-        std::cerr << "Expected two arguments" << std::endl;
+        cerr << "Expected two arguments" << endl;
         return 1;
     }
-
-    std::string flag = argv[1];
-    std::string pattern = argv[2];
-
+    string flag = argv[1];
+    string pattern = argv[2];
     if (flag != "-E") {
-        std::cerr << "Expected first argument to be '-E'" << std::endl;
+        cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
-
-    std::string input_line;
-    std::getline(std::cin, input_line);
-
-    try {
-        if (match_pattern(input_line, pattern)) {
-            std::cout << "match" << std::endl;
-            return 0;
-        } else {
-            std::cout << "no match" << std::endl;
-            return 1;
-        }
-    } catch (const std::runtime_error& e) {
-        std::cerr << e.what() << std::endl;
+    string input_line;
+    getline(cin, input_line);
+    if (match_pattern(input_line, pattern)) {
+        return 0;
+    } else {
         return 1;
     }
 }
