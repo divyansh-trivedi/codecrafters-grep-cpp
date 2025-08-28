@@ -89,24 +89,27 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
     string rest = pattern.substr(atom_len + (quantifier == '?' || quantifier == '+' ? 1 : 0));
 
     if (quantifier == '?') {
-        int original_group_count = group_count;
-        auto original_captures = captured_groups;
-        
-        // Path A (skip atom): Try matching the rest of the pattern.
-        int len = match_recursive(rest, text, group_count);
-        if (len != -1) return len;
-        
-        // Path B (match atom): Restore state and try matching the atom, then the rest.
-        group_count = original_group_count;
-        captured_groups = original_captures;
+    int original_group_count = group_count;
+    auto original_captures = captured_groups;
 
-        int atom_match_len = match_recursive(atom, text, group_count);
-        if (atom_match_len != -1) {
-            int rest_len = match_recursive(rest, text.substr(atom_match_len), group_count);
-            if (rest_len != -1) return atom_match_len + rest_len;
+    // Path A: skip atom (0 occurrences)
+    int len = match_recursive(rest, text, group_count);
+    if (len != -1) return len;
+
+    // Path B: match atom once (1 occurrence)
+    group_count = original_group_count;
+    captured_groups = original_captures;
+
+    if (!atom.empty()) {
+        int atom_len_matched = match_recursive(atom, text, group_count);
+        if (atom_len_matched != -1) {
+            int rest_len = match_recursive(rest, text.substr(atom_len_matched), group_count);
+            if (rest_len != -1) return atom_len_matched + rest_len;
         }
-        return -1;
     }
+    return -1;
+}
+
 
     if (quantifier == '+') {
         // Must match the atom at least once.
