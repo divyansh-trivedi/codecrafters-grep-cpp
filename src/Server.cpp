@@ -1,236 +1,637 @@
 #include <iostream>
-#include <fstream>
-#include <vector>
 #include <string>
-#include <filesystem>
+#include <vector>
 #include <cctype>
 #include <stdexcept>
+#include <fstream>
+#include <algorithm> // For std::copy
+#include <cstring>   // For strlen and strcpy
 
-// --- Start of Merged Pattern.h and Pattern.cpp ---
+using namespace std;
 
-class Pattern {
-public:
-    Pattern(const std::string& pattern);
-    bool matches(const std::string& text) const;
+// --- Start of RegParser.h content ---
 
-private:
-    std::string compiled_pattern;
-    bool match_here(const std::string& text, const std::string& regexp) const;
-    bool match_plus(const std::string& text, char match_char, const std::string& regexp) const;
-    bool match_question_mark(const std::string& text, char match_char, const std::string& regexp) const;
-};
+typedef enum
+{
+    NONE,
+    PLUS,
+    STAR,
+    MARK
+} Quantifier;
 
-class PatternCompiler {
-public:
-    PatternCompiler(const std::string& pattern);
-    Pattern compile();
+typedef enum
+{
+    SINGLE_CHAR,
+    DIGIT,
+    ALPHANUM,
+    START,
+    END,
+    LIST,
+    ALT,
+    ETK, // Error Token
+} RegType;
 
-private:
-    std::string source_pattern;
-};
+struct Re; // Forward declaration for recursive struct
+struct Re
+{
+    RegType type;
+    char* ccl; // Character class list or single char
+    bool isNegative;
+    Quantifier quantifier;
+    std::vector<std::vector<Re>> alternatives;
 
-
-Pattern::Pattern(const std::string& pattern) : compiled_pattern(pattern) {}
-
-bool Pattern::matches(const std::string& text) const {
-    if (compiled_pattern.empty()) return true;
-    if (compiled_pattern[0] == '^') {
-        return match_here(text, compiled_pattern.substr(1));
+    // Destructor to free allocated memory
+    ~Re() {
+        delete[] ccl;
     }
-    std::string remaining_text = text;
-    // Loop to try matching from every start position
-    for (size_t i = 0; i < text.length(); ++i) {
-        if (match_here(text.substr(i), compiled_pattern)) {
-            return true;
+
+    // Default constructor
+    Re() : type(ETK), ccl(nullptr), isNegative(false), quantifier(NONE) {}
+
+    // Copy constructor
+    Re(const Re& other) {
+        type = other.type;
+        isNegative = other.isNegative;
+        quantifier = other.quantifier;
+        alternatives = other.alternatives;
+        if (other.ccl) {
+            ccl = new char[strlen(other.ccl) + 1];
+            strcpy(ccl, other.ccl);
+        } else {
+            ccl = nullptr;
         }
     }
-    // Also check for patterns that can match an empty string (like '$')
-    return match_here("", compiled_pattern);
+
+    // Copy assignment operator
+    Re& operator=(const Re& other) {
+        if (this == &other) {
+            return *this;
+        }
+        delete[] ccl;
+        type = other.type;
+        isNegative = other.isNegative;
+        quantifier = other.quantifier;
+        alternatives = other.alternatives;
+        if (other.ccl) {
+            ccl = new char[strlen(other.ccl) + 1];
+            strcpy(ccl, other.ccl);
+        } else {
+            ccl = nullptr;
+        }
+        return *this;
+    }
+};
+
+class RegParser
+{
+public:
+    RegParser(const std::string& pattern)
+    {
+        _pattern_str = pattern;
+        _pattern = _pattern_str.c_str();
+        _begin = _pattern;
+        _end = _begin + _pattern_str.size();
+    };
+
+    bool parse();
+    Re makeRe(RegType type, char* ccl = nullptr, bool isNegative = false);
+
+    static bool match_current(const char* c, const std::vector<Re>& regex, int idx);
+    static bool match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx);
+    static bool match_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
+    static bool match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
+    static bool match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
+    static bool match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
+    
+    std::vector<Re> regex;
+
+private:
+    std::string _pattern_str;
+    const char* _pattern{nullptr};
+    const char* _begin{nullptr};
+    const char* _end{nullptr};
+
+    bool isEof();
+    bool consume();
+    bool check(char c);
+    bool match(char c);
+
+    Re parseElement();
+    Re parseCharacterClass();
+    Re parseGroup();
+    void applyQuantifiers(Re& element);
+};
+
+// --- End of RegParser.h content ---
+// --- Start of RegParser.cpp content ---
+
+bool RegParser::parse()
+{
+    while (!isEof())
+    {
+        Re element = parseElement();
+        if (element.type == ETK)
+            return false;
+        regex.push_back(element);
+    }
+    return true;
 }
 
-bool Pattern::match_here(const std::string& text, const std::string& regexp) const {
-    if (regexp.empty()) return true;
-    if (regexp == "$") return text.empty();
+Re RegParser::makeRe(RegType type, char* ccl, bool isNegative)
+{
+    Re current;
+    current.type = type;
+    current.ccl = ccl;
+    current.isNegative = isNegative;
+    current.quantifier = NONE;
+    return current;
+}
 
-    if (regexp.length() > 1) {
-        if (regexp[1] == '?') {
-            return match_question_mark(text, regexp[0], regexp.substr(2));
-        }
-        if (regexp[1] == '+') {
-            // '+' must match at least one character
-            return !text.empty() && (regexp[0] == '.' || text[0] == regexp[0]) &&
-                   match_plus(text.substr(1), regexp[0], regexp.substr(2));
-        }
+bool RegParser::match_current(const char* c, const std::vector<Re>& regex, int idx)
+{
+    if (*c == '\0') {
+        return regex[idx].type == END;
     }
 
-    if (!regexp.empty() && regexp[0] == '(' && regexp.back() == ')') {
-        std::string content = regexp.substr(1, regexp.length() - 2);
-        size_t pipe_pos = content.find('|');
-        if (pipe_pos != std::string::npos) {
-            std::string left = content.substr(0, pipe_pos);
-            std::string right = content.substr(pipe_pos + 1);
-            return match_here(text, left) || match_here(text, right);
-        }
-    }
-
-    if (regexp.length() >= 2 && regexp.substr(0, 2) == "\\d") {
-        return !text.empty() && isdigit(text[0]) && match_here(text.substr(1), regexp.substr(2));
-    }
-
-    if (regexp.length() >= 2 && regexp.substr(0, 2) == "\\w") {
-        return !text.empty() && (isalnum(text[0]) || text[0] == '_') && match_here(text.substr(1), regexp.substr(2));
-    }
-
-    if (!regexp.empty() && regexp[0] == '[') {
-        size_t close_bracket = regexp.find(']');
-        if (close_bracket != std::string::npos) {
-            std::string content = regexp.substr(1, close_bracket - 1);
-            bool negated = !content.empty() && content[0] == '^';
-            if (negated) {
-                content = content.substr(1);
+    const Re* current = &regex[idx];
+    switch (current->type)
+    {
+    case DIGIT:
+        return isdigit(*c);
+    case ALPHANUM:
+        return isalnum(*c) || *c == '_';
+    case SINGLE_CHAR:
+        return *c == *current->ccl || *current->ccl == '.';
+    case LIST:
+    {
+        const char* p = current->ccl;
+        bool found = false;
+        while (*p != '\0')
+        {
+            if (*c == *p)
+            {
+                found = true;
+                break;
             }
-            bool found = !text.empty() && content.find(text[0]) != std::string::npos;
-            if (negated ? !found : found) {
-                return match_here(text.substr(1), regexp.substr(close_bracket + 1));
-            }
+            ++p;
         }
+        return current->isNegative ? !found : found;
+    }
+    case START:
+        return true;
+    case END:
+        return *c == '\0';
+    default:
         return false;
     }
-
-    if (!text.empty() && (regexp[0] == '.' || regexp[0] == text[0])) {
-        return match_here(text.substr(1), regexp.substr(1));
-    }
-
-    return false;
 }
 
-bool Pattern::match_plus(const std::string& text, char match_char, const std::string& regexp) const {
-    std::string current_text = text;
-    // This implements a greedy match with backtracking
-    if (match_here(current_text, regexp)) {
-        return true; // Match zero more times
-    }
-    while (!current_text.empty() && (current_text[0] == match_char || match_char == '.')) {
-        current_text = current_text.substr(1);
-        if (match_here(current_text, regexp)) {
-            return true;
-        }
-    }
-    return false;
-}
+bool RegParser::match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx)
+{
+    const char* c = *start_pos;
+    int rIdx = idx;
+    int pattern_length = regex.size();
 
-bool Pattern::match_question_mark(const std::string& text, char match_char, const std::string& regexp) const {
-    // Path 1: Match the optional character
-    if (!text.empty() && (text[0] == match_char || match_char == '.')) {
-        if (match_here(text.substr(1), regexp)) {
-            return true;
-        }
-    }
-    // Path 2 (Backtrack): Skip the optional character
-    return match_here(text, regexp);
-}
-
-PatternCompiler::PatternCompiler(const std::string& pattern) : source_pattern(pattern) {}
-
-Pattern PatternCompiler::compile() {
-    return Pattern(source_pattern);
-}
-
-// --- End of Merged Pattern.h and Pattern.cpp ---
-
-namespace fs = std::filesystem;
-
-void searchTextFiles(const Pattern& pattern, const std::vector<std::string>& filepaths);
-void handleRecursive(const Pattern& pattern, const std::string& filepath);
-
-int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " -E \"pattern\" [file...]" << std::endl;
-        return 1;
-    }
-
-    std::vector<std::string> args(argv, argv + argc);
-
-    if (args.size() == 3 && args[1] == "-E") {
-        Pattern pattern = PatternCompiler(args[2]).compile();
-        std::string inputLine;
-        if (std::getline(std::cin, inputLine)) {
-            if (pattern.matches(inputLine)) {
-                return 0;
+    while (rIdx < pattern_length)
+    {
+        const Re& current = regex[rIdx];
+        
+        if (current.quantifier == PLUS) {
+            const char* temp_c = c;
+            if (current.type == ALT) {
+                if(match_alt_one_or_more(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
+            } else {
+                if(match_one_or_more(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
             }
+            return false;
         }
-        return 1;
-    } else {
-        std::string firstFlag = args[1];
-        if (firstFlag == "-E") {
-            Pattern pattern = PatternCompiler(args[2]).compile();
-            std::vector<std::string> filepaths(args.begin() + 3, args.end());
-            searchTextFiles(pattern, filepaths);
-        } else if (firstFlag == "-r") {
-            if (args.size() < 5 || args[2] != "-E") {
-                 std::cerr << "Usage: " << argv[0] << " -r -E \"pattern\" <directory>" << std::endl;
-                 return 1;
+        
+        if (current.quantifier == MARK) {
+            const char* temp_c = c;
+            if (current.type == ALT) {
+                if(match_alt_zero_or_one(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
+            } else {
+                if(match_zero_or_one(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
             }
-            Pattern pattern = PatternCompiler(args[3]).compile();
-            handleRecursive(pattern, args[4]);
+            return false;
         }
-    }
 
-    return 0;
-}
-
-void searchTextFiles(const Pattern& pattern, const std::vector<std::string>& filepaths) {
-    bool foundOne = false;
-    for (const auto& filepath : filepaths) {
-        std::ifstream file(filepath);
-        if (file.is_open()) {
-            std::string inputLine;
-            while (std::getline(file, inputLine)) {
-                if (pattern.matches(inputLine)) {
-                    foundOne = true;
-                    if (filepaths.size() > 1) {
-                        std::cout << filepath << ":" << inputLine << std::endl;
-                    } else {
-                        std::cout << inputLine << std::endl;
+        if (current.type == ALT) {
+            for (const auto& alt : current.alternatives) {
+                const char* temp_c = c;
+                if (match_from_position(&temp_c, alt, 0)) {
+                    if (match_from_position(&temp_c, regex, rIdx + 1)) {
+                        *start_pos = temp_c;
+                        return true;
                     }
                 }
             }
+            return false;
+        }
+
+        if (!match_current(c, regex, rIdx)) {
+            return false;
+        }
+
+        if (current.type != START) {
+            c++;
+        }
+        rIdx++;
+    }
+
+    *start_pos = c;
+    return true;
+}
+
+bool RegParser::match_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
+{
+    const char* t = *c;
+    if (!match_current(t, regex, idx))
+        return false;
+    t++;
+
+    while (*t != '\0' && match_current(t, regex, idx))
+    {
+        t++;
+    }
+
+    while (t >= *c)
+    {
+        const char* test_pos = t;
+        if (match_from_position(&test_pos, regex, idx + 1))
+        {
+            *c = test_pos;
+            return true;
+        }
+        if (t == *c) break;
+        t--;
+    }
+    return false;
+}
+
+bool RegParser::match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
+{
+    const Re& altGp = regex[idx];
+    const char* original_pos = *c;
+
+    // Must match at least once
+    bool matched_once = false;
+    const char* first_match_end = original_pos;
+    for(const auto& alt : altGp.alternatives) {
+        const char* temp_pos = original_pos;
+        if(match_from_position(&temp_pos, alt, 0) && temp_pos > original_pos) {
+            first_match_end = temp_pos;
+            matched_once = true;
+            break;
+        }
+    }
+    if (!matched_once) return false;
+
+    const char* pos = first_match_end;
+    while(true) {
+        const char* current_match_end = pos;
+        bool found_match = false;
+        for (const auto& alt : altGp.alternatives) {
+            const char* temp_pos = pos;
+            if (match_from_position(&temp_pos, alt, 0) && temp_pos > pos) {
+                current_match_end = temp_pos;
+                found_match = true;
+                break;
+            }
+        }
+
+        if (!found_match) break;
+        pos = current_match_end;
+    }
+
+    while (pos >= first_match_end) {
+        const char* temp_pos = pos;
+        if (match_from_position(&temp_pos, regex, idx + 1)) {
+            *c = temp_pos;
+            return true;
+        }
+        if (pos == first_match_end) break;
+        pos--;
+    }
+     // Check if matching just once is enough
+    const char* temp_pos_once = first_match_end;
+    if (match_from_position(&temp_pos_once, regex, idx + 1)) {
+        *c = temp_pos_once;
+        return true;
+    }
+    
+    return false;
+}
+
+bool RegParser::match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
+{
+    const char* temp_pos = *c;
+    if (match_current(temp_pos, regex, idx))
+    {
+        temp_pos++;
+        if (match_from_position(&temp_pos, regex, idx + 1))
+        {
+            *c = temp_pos;
+            return true;
+        }
+    }
+    return match_from_position(c, regex, idx + 1);
+}
+
+bool RegParser::match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
+{
+    // Path 1: Match the group
+    const Re& altGp = regex[idx];
+    for (const auto& alt : altGp.alternatives)
+    {
+        const char* t = *c;
+        if (match_from_position(&t, alt, 0))
+        {
+            if (match_from_position(&t, regex, idx + 1))
+            {
+                *c = t;
+                return true;
+            }
+        }
+    }
+    // Path 2: Skip the group
+    return match_from_position(c, regex, idx + 1);
+}
+
+bool RegParser::isEof()
+{
+    return _pattern >= _end;
+}
+
+bool RegParser::consume()
+{
+    if (!isEof())
+    {
+        _pattern++;
+        return true;
+    }
+    return false;
+}
+
+bool RegParser::check(char c)
+{
+    return !isEof() && *_pattern == c;
+}
+
+bool RegParser::match(char c)
+{
+    if (check(c))
+        return consume();
+    return false;
+}
+
+Re RegParser::parseElement()
+{
+    if (check('^')) {
+        consume();
+        return makeRe(START);
+    }
+    if (check('$')) {
+        consume();
+        return makeRe(END);
+    }
+    if (check('\\')) {
+        consume();
+        if (isEof()) return makeRe(ETK);
+        Re current;
+        if (check('d')) {
+            current = makeRe(DIGIT);
+        } else if (check('w')) {
+            current = makeRe(ALPHANUM);
         } else {
-            std::cerr << "Error: could not open file: " << filepath << std::endl;
+            char* cstr = new char[2];
+            cstr[0] = *_pattern;
+            cstr[1] = '\0';
+            current = makeRe(SINGLE_CHAR, cstr);
         }
+        consume();
+        applyQuantifiers(current);
+        return current;
     }
-    exit(foundOne ? 0 : 1);
+    if (check('[')) {
+        consume();
+        return parseCharacterClass();
+    }
+    if (check('(')) {
+        consume();
+        return parseGroup();
+    }
+    if (!isEof()) {
+        char* cstr = new char[2];
+        cstr[0] = *_pattern;
+        cstr[1] = '\0';
+        consume();
+        Re current = makeRe(SINGLE_CHAR, cstr);
+        applyQuantifiers(current);
+        return current;
+    }
+    return makeRe(ETK);
 }
 
-void handleRecursive(const Pattern& pattern, const std::string& filepath) {
-    fs::path startPath(filepath);
-    if (!fs::exists(startPath)) {
-        std::cerr << "Error: path does not exist: " << filepath << std::endl;
-        exit(2);
+Re RegParser::parseCharacterClass()
+{
+    Re current = makeRe(LIST);
+    std::string buffer;
+
+    current.isNegative = match('^');
+    while (!isEof() && !check(']'))
+    {
+        buffer.push_back(*_pattern);
+        consume();
     }
 
-    bool foundOne = false;
-    if (fs::is_directory(startPath)) {
-        for (const auto& entry : fs::recursive_directory_iterator(startPath)) {
-            if (fs::is_regular_file(entry)) {
-                // To avoid exiting early, we capture the return status of searchTextFiles
-                // This is a simplified approach; a more robust solution would not use exit() inside this function.
-                // For this project, we'll assume a single recursive search is the main goal.
-                std::ifstream file(entry.path());
-                if(file.is_open()){
-                    std::string line;
-                    while(std::getline(file, line)){
-                        if(pattern.matches(line)){
-                            foundOne = true;
-                            std::cout << entry.path().string() << ":" << line << std::endl;
-                        }
-                    }
+    if (!match(']'))
+    {
+        return makeRe(ETK);
+    }
+
+    char* cstr = new char[buffer.size() + 1];
+    std::copy(buffer.begin(), buffer.end(), cstr);
+    cstr[buffer.size()] = '\0';
+    current.ccl = cstr;
+    applyQuantifiers(current);
+    return current;
+}
+
+Re RegParser::parseGroup()
+{
+    Re altGp = makeRe(ALT);
+    std::vector<Re> current_sequence;
+    bool isClosed = false;
+
+    while (!isEof())
+    {
+        if (check('|')) {
+            consume();
+            altGp.alternatives.push_back(current_sequence);
+            current_sequence.clear();
+        } else if (check(')')) {
+            consume();
+            altGp.alternatives.push_back(current_sequence);
+            isClosed = true;
+            break;
+        } else {
+            Re element = parseElement();
+            if (element.type == ETK) return makeRe(ETK);
+            current_sequence.push_back(element);
+        }
+    }
+
+    if (!isClosed) return makeRe(ETK);
+
+    applyQuantifiers(altGp);
+    return altGp;
+}
+
+void RegParser::applyQuantifiers(Re& element)
+{
+    if (!isEof()) {
+        if (check('+')) {
+            element.quantifier = PLUS;
+            consume();
+        } else if (check('?')) {
+            element.quantifier = MARK;
+            consume();
+        }
+    }
+}
+
+// --- End of RegParser.cpp content ---
+// --- Start of Server.cpp content ---
+
+#ifdef DEBUG
+void printDebug(const std::vector<Re>& reList);
+#endif
+
+bool match_pattern(const std::string& input_line, const std::string& pattern)
+{
+    RegParser rp(pattern);
+
+    if (rp.parse())
+    {
+#ifdef DEBUG
+        std::cerr << "--- Parsed Regex Structure ---" << std::endl;
+        printDebug(rp.regex);
+        std::cerr << "----------------------------" << std::endl;
+#endif
+        const char* c = input_line.c_str();
+        bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
+
+        if (hasStartAnchor)
+        {
+            return RegParser::match_from_position(&c, rp.regex, 1);
+        }
+        else
+        {
+            while (*c != '\0')
+            {
+                const char* temp_c = c;
+                if (RegParser::match_from_position(&temp_c, rp.regex, 0))
+                {
+                    return true;
                 }
+                c++;
             }
+            const char* end_of_string = c;
+            if (RegParser::match_from_position(&end_of_string, rp.regex, 0)) {
+                return true;
+            }
+            return false;
         }
-    } else {
-        searchTextFiles(pattern, {filepath});
-        return; // searchTextFiles will exit
     }
-    exit(foundOne ? 0 : 1);
+    else
+    {
+        throw std::runtime_error("Invalid pattern: " + pattern);
+    }
 }
+
+int main(int argc, char* argv[])
+{
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+
+    std::cerr << "Logs from your program will appear here" << std::endl;
+
+    if (argc != 3)
+    {
+        std::cerr << "Usage: " << argv[0] << " -E \"<pattern>\"" << std::endl;
+        return 1;
+    }
+
+    std::string flag = argv[1];
+    std::string pattern = argv[2];
+
+    if (flag != "-E")
+    {
+        std::cerr << "Expected first argument to be '-E'" << std::endl;
+        return 1;
+    }
+
+    std::string input_line;
+    std::getline(std::cin, input_line);
+
+    try
+    {
+        if (match_pattern(input_line, pattern))
+        {
+            return 0;
+        }
+        else
+        {
+            return 1;
+        }
+    }
+    catch (const std::runtime_error& e)
+    {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+#ifdef DEBUG
+void printQuantifier(const Re& re);
+
+void printDebug(const std::vector<Re>& reList) {
+    for (const auto& tmp : reList) {
+        switch (tmp.type) {
+            case DIGIT: std::cout << "DIGIT"; break;
+            case ALPHANUM: std::cout << "ALPHANUM"; break;
+            case SINGLE_CHAR: std::cout << "SINGLE CHAR" << " >> " << tmp.ccl; break;
+            case ALT:
+                std::cout << "ALT" << " >> " << std::endl;
+                std::cout << "(" << std::endl;
+                for (size_t i = 0; i < tmp.alternatives.size(); ++i) {
+                    printDebug(tmp.alternatives[i]);
+                    if (i < tmp.alternatives.size() - 1)
+                        std::cout << "|" << std::endl;
+                }
+                std::cout << ")";
+                break;
+            case LIST: std::cout << (tmp.isNegative ? "NEGATIVE " : "") << "LIST" << " >> " << tmp.ccl; break;
+            case START: std::cout << "START"; break;
+            case END: std::cout << "END"; break;
+            case ETK: std::cout << "ETK"; break;
+            default: std::cout << "UNKNOWN"; break;
+        }
+        printQuantifier(tmp);
+        std::cout << std::endl;
+    }
+}
+#endif
