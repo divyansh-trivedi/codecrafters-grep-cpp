@@ -51,18 +51,26 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
         else if (pattern[i] == '|' && depth == 0) {
             string left = pattern.substr(0, i);
             string right = pattern.substr(i + 1);
-            int current_group_count = group_count; // Save state
+            
+            // --- START OF THE CRITICAL FIX ---
+            // Save the state before trying the left path
+            int original_group_count = group_count;
+            auto original_captures = captured_groups;
+
             int len = match_recursive(left, text, group_count);
             if (len != -1) return len;
-            group_count = current_group_count; // Restore state for other branch
+
+            // Restore the state before trying the right path
+            group_count = original_group_count;
+            captured_groups = original_captures;
+            // --- END OF THE CRITICAL FIX ---
+
             return match_recursive(right, text, group_count);
         }
     }
     
-    // --- START OF RE-ARCHITECTED LOGIC ---
-    // First, determine the "atom" (the unit to be matched) and check for a quantifier after it.
-    
-    size_t atom_len = 1; // Default atom is a single character
+    // Determine the "atom" (the unit to be matched) and check for a quantifier after it.
+    size_t atom_len = 1;
     if (pattern[0] == '\\' && pattern.length() > 1) {
         atom_len = 2;
     } else if (pattern[0] == '[') {
@@ -103,18 +111,14 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
 
         string remaining_text = text.substr(atom_match_len);
         
-        // Greedy path: try to match the quantified atom again
         int more_len = match_recursive(pattern.substr(0, atom_len + 1), remaining_text, group_count);
         if (more_len != -1) return atom_match_len + more_len;
 
-        // Backtrack path: match the rest of the pattern
         int rest_len = match_recursive(rest, remaining_text, group_count);
         if (rest_len != -1) return atom_match_len + rest_len;
         
         return -1;
     }
-    // --- END OF RE-ARCHITECTED LOGIC ---
-
 
     // Handle the actual matching of the atom
     if (pattern[0] == '(') {
@@ -137,7 +141,7 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
             int group_num = pattern[1] - '0';
             if (captured_groups.count(group_num)) {
                 string captured = captured_groups[group_num];
-                if (text.rfind(captured, 0) == 0) { // C++20 text.starts_with(captured)
+                if (text.rfind(captured, 0) == 0) {
                     int rest_len = match_recursive(rest, text.substr(captured.length()), group_count);
                     if (rest_len != -1) return captured.length() + rest_len;
                 }
