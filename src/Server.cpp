@@ -94,9 +94,11 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
     string rest = pattern.substr(atom_len + (quantifier == '?' || quantifier == '+' ? 1 : 0));
 
     if (quantifier == '?') {
+        // Path A (skip atom): Try matching the rest of the pattern.
         int len = match_recursive(rest, text, group_count);
         if (len != -1) return len;
         
+        // Path B (match atom): Match the atom, then the rest.
         int atom_match_len = match_recursive(atom, text, group_count);
         if (atom_match_len != -1) {
             int rest_len = match_recursive(rest, text.substr(atom_match_len), group_count);
@@ -106,14 +108,17 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
     }
 
     if (quantifier == '+') {
+        // Must match the atom at least once.
         int atom_match_len = match_recursive(atom, text, group_count);
         if (atom_match_len == -1) return -1;
 
         string remaining_text = text.substr(atom_match_len);
         
+        // Path A (Greedy): Try to match the quantified atom again.
         int more_len = match_recursive(pattern.substr(0, atom_len + 1), remaining_text, group_count);
         if (more_len != -1) return atom_match_len + more_len;
 
+        // Path B (Backtrack): Try to match the rest of the pattern.
         int rest_len = match_recursive(rest, remaining_text, group_count);
         if (rest_len != -1) return atom_match_len + rest_len;
         
