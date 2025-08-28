@@ -1,98 +1,112 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-// Forward declaration
-bool match_here(const string& pattern, int pi, const string& text, int ti);
+// Forward declarations
+bool matchRegex(const string &pattern, const string &text);
+bool matchHere(const string &pattern, const string &text);
 
-// Match a group ( ... ) possibly with | alternatives
-bool match_group(const string& group, const string& text, int ti, int &consumed) {
-    // Split by | at top level
-    int depth = 0;
-    vector<string> parts;
-    string cur;
-    for (char c : group) {
-        if (c == '(') depth++;
-        else if (c == ')') depth--;
-        if (c == '|' && depth == 0) {
-            parts.push_back(cur);
-            cur.clear();
-        } else cur.push_back(c);
+// Utility: check if char is digit
+bool isDigit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+// Match with anchors
+bool matchRegex(const string &pattern, const string &text) {
+    if (!pattern.empty() && pattern[0] == '^') {
+        return matchHere(pattern.substr(1), text);
     }
-    parts.push_back(cur);
-
-    for (auto &alt : parts) {
-        int tmp = ti;
-        if ((int)alt.size() <= (int)text.size() - ti &&
-            text.substr(ti, alt.size()) == alt) {
-            consumed = alt.size();
-            return true;
-        }
+    for (size_t i = 0; i <= text.size(); i++) {
+        if (matchHere(pattern, text.substr(i))) return true;
     }
     return false;
 }
 
-bool match_here(const string& pattern, int pi, const string& text, int ti) {
-    if (pi == (int)pattern.size()) return ti == (int)text.size();
-    if (pattern[pi] == '$' && pi + 1 == (int)pattern.size()) return ti == (int)text.size();
+// Recursive matcher
+bool matchHere(const string &pattern, const string &text) {
+    if (pattern.empty()) return true;
+    if (pattern == "$") return text.empty();
 
-    if (pattern[pi] == '(') {
-        int depth = 1, j = pi + 1;
-        while (j < (int)pattern.size() && depth > 0) {
-            if (pattern[j] == '(') depth++;
-            else if (pattern[j] == ')') depth--;
-            j++;
-        }
-        string inside = pattern.substr(pi + 1, j - pi - 2);
-        char quant = (j < (int)pattern.size() ? pattern[j] : '\0');
-
-        if (quant == '+' || quant == '?') {
-            int consumed = 0;
-            if (!match_group(inside, text, ti, consumed)) {
-                if (quant == '?') return match_here(pattern, j + 1, text, ti);
-                return false;
+    // Handle groups ( ... )
+    if (pattern[0] == '(') {
+        int depth = 0;
+        size_t i = 0;
+        for (; i < pattern.size(); i++) {
+            if (pattern[i] == '(') depth++;
+            else if (pattern[i] == ')') {
+                depth--;
+                if (depth == 0) break;
             }
-            if (quant == '+') {
-                int pos = ti + consumed;
-                while (true) {
-                    int c2 = 0;
-                    if (match_group(inside, text, pos, c2)) pos += c2;
-                    else break;
+        }
+        if (depth != 0) return false; // no closing ')'
+
+        string inside = pattern.substr(1, i - 1);
+        string after = (i + 1 < pattern.size()) ? pattern.substr(i + 1) : "";
+
+        char quant = '\0';
+        if (!after.empty() && (after[0] == '+' || after[0] == '?')) {
+            quant = after[0];
+            after = after.substr(1);
+        }
+
+        if (quant == '+') {
+            // must match at least once
+            size_t consumed = 0;
+            if (!matchHere(inside + "#", text + "#")) return false;
+
+            // Try to consume repeatedly
+            string rest = text;
+            while (matchHere(inside + "#", rest + "#")) {
+                // Remove matched part (brute force)
+                for (size_t k = 1; k <= rest.size(); k++) {
+                    if (matchHere(inside, rest.substr(0, k))) {
+                        rest = rest.substr(k);
+                        goto matched_group;
+                    }
                 }
-                return match_here(pattern, j + 1, text, pos);
-            } else { // ?
-                if (match_here(pattern, j + 1, text, ti + consumed)) return true;
-                return match_here(pattern, j + 1, text, ti);
+                break;
+                matched_group:;
             }
+            return matchHere(after, rest);
+        } else if (quant == '?') {
+            // 0 or 1 times
+            // Try matching once
+            for (size_t k = 0; k <= text.size(); k++) {
+                if (matchHere(inside, text.substr(0, k)) &&
+                    matchHere(after, text.substr(k)))
+                    return true;
+            }
+            // Or skip group
+            return matchHere(after, text);
         } else {
-            int consumed = 0;
-            if (!match_group(inside, text, ti, consumed)) return false;
-            return match_here(pattern, j, text, ti + consumed);
+            // Plain group
+            for (size_t k = 0; k <= text.size(); k++) {
+                if (matchHere(inside, text.substr(0, k)) &&
+                    matchHere(after, text.substr(k)))
+                    return true;
+            }
+            return false;
         }
     }
 
-    if (pi + 1 < (int)pattern.size() && (pattern[pi + 1] == '?' || pattern[pi + 1] == '+')) {
-        char quant = pattern[pi + 1];
-        if (quant == '?') {
-            if (ti < (int)text.size() && pattern[pi] == text[ti])
-                if (match_here(pattern, pi + 2, text, ti + 1)) return true;
-            return match_here(pattern, pi + 2, text, ti);
-        } else { // +
-            int start = ti;
-            if (ti >= (int)text.size() || pattern[pi] != text[ti]) return false;
-            while (ti < (int)text.size() && pattern[pi] == text[ti]) ti++;
-            return match_here(pattern, pi + 2, text, ti);
+    // Handle escape \d
+    if (pattern.size() >= 2 && pattern[0] == '\\' && pattern[1] == 'd') {
+        if (!text.empty() && isDigit(text[0])) {
+            return matchHere(pattern.substr(2), text.substr(1));
         }
+        return false;
     }
 
-    if (ti < (int)text.size() && pattern[pi] == text[ti])
-        return match_here(pattern, pi + 1, text, ti + 1);
+    // Handle dot
+    if (pattern[0] == '.') {
+        if (!text.empty()) return matchHere(pattern.substr(1), text.substr(1));
+        return false;
+    }
 
-    return false;
-}
+    // Normal character
+    if (!text.empty() && pattern[0] == text[0]) {
+        return matchHere(pattern.substr(1), text.substr(1));
+    }
 
-bool match(const string& pattern, const string& text) {
-    if (!pattern.empty() && pattern[0] == '^') return match_here(pattern, 1, text, 0);
-    for (int i = 0; i <= (int)text.size(); i++) if (match_here(pattern, 0, text, i)) return true;
     return false;
 }
 
@@ -100,12 +114,12 @@ int main(int argc, char* argv[]) {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
-    if (argc != 3) return 1;
-    string flag = argv[1], pattern = argv[2];
-    if (flag != "-E") return 1;
-
-    string input;
+    string pattern, input;
+    if (argc >= 3 && string(argv[1]) == "-E") {
+        pattern = argv[2];
+    }
     getline(cin, input);
 
-    return match(pattern, input) ? 0 : 1;
+    bool matched = matchRegex(pattern, input);
+    return matched ? 0 : 1;
 }
