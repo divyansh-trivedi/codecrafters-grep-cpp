@@ -8,8 +8,7 @@ using namespace std;
 // Forward declaration
 bool match_recursive(const string& pattern, const string& text);
 
-// The main entry point for the regex engine.
-// Handles ^ anchor and unanchored search loop.
+// Main entry point for regex engine
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern[0] == '^') {
         return match_recursive(pattern.substr(1), input_line);
@@ -29,23 +28,21 @@ bool match_recursive(const string& pattern, const string& text) {
     if (pattern.empty()) return true;
     if (pattern[0] == '$' && pattern.length() == 1) return text.empty();
 
-    // Handle quantifiers ? and +
-    if (pattern.length() > 1) {
-        if (pattern[1] == '?') {
-            return match_recursive(pattern.substr(2), text) ||
-                   (!text.empty() &&
-                    (pattern[0] == '.' || pattern[0] == text[0]) &&
-                    match_recursive(pattern.substr(2), text.substr(1)));
-        }
-        if (pattern[1] == '+') {
-            return !text.empty() &&
-                   (pattern[0] == '.' || pattern[0] == text[0]) &&
-                   (match_recursive(pattern, text.substr(1)) ||
-                    match_recursive(pattern.substr(2), text.substr(1)));
+    // Handle top-level alternation (pattern like "cat|dog")
+    {
+        int depth = 0;
+        for (size_t i = 0; i < pattern.size(); ++i) {
+            if (pattern[i] == '(') depth++;
+            else if (pattern[i] == ')') depth--;
+            else if (pattern[i] == '|' && depth == 0) {
+                string left = pattern.substr(0, i);
+                string right = pattern.substr(i + 1);
+                return match_recursive(left, text) || match_recursive(right, text);
+            }
         }
     }
 
-    // Handle groups () with alternation
+    // Handle groups () with alternation and quantifiers
     if (pattern[0] == '(') {
         int level = 0;
         size_t end_paren_pos = string::npos;
@@ -65,7 +62,7 @@ bool match_recursive(const string& pattern, const string& text) {
             string group_content = pattern.substr(1, end_paren_pos - 1);
             string after_group = pattern.substr(end_paren_pos + 1);
 
-            // Alternation inside group
+            // Handle alternation inside group
             int depth = 0;
             for (size_t i = 0; i < group_content.size(); ++i) {
                 if (group_content[i] == '(') depth++;
@@ -78,28 +75,65 @@ bool match_recursive(const string& pattern, const string& text) {
                 }
             }
 
-            // No alternation, simple group
+            // Handle group followed by +
+            if (!after_group.empty() && after_group[0] == '+') {
+                // Must match at least once
+                if (!match_recursive(group_content, text)) return false;
+
+                // Try consuming progressively more of `text` with repeated group
+                for (size_t i = 0; i <= text.size(); ++i) {
+                    if (match_recursive(group_content, text.substr(0, i))) {
+                        if (match_recursive("(" + group_content + ")+" + after_group.substr(1), text.substr(i))) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            // Handle group followed by ?
+            if (!after_group.empty() && after_group[0] == '?') {
+                return match_recursive(after_group.substr(1), text) ||
+                       (match_recursive(group_content, text) &&
+                        match_recursive(after_group.substr(1), text.substr(text.size() - text.size()))); 
+            }
+
+            // No special quantifier: just expand the group
             return match_recursive(group_content + after_group, text);
         }
     }
 
-    // Handle top-level alternation (pattern like "cat|dog")
-    {
-        int depth = 0;
-        for (size_t i = 0; i < pattern.size(); ++i) {
-            if (pattern[i] == '(') depth++;
-            else if (pattern[i] == ')') depth--;
-            else if (pattern[i] == '|' && depth == 0) {
-                string left = pattern.substr(0, i);
-                string right = pattern.substr(i + 1);
-                return match_recursive(left, text) || match_recursive(right, text);
+    // Handle character-level quantifiers ? and +
+    if (pattern.length() > 1) {
+        if (pattern[1] == '?') {
+            return match_recursive(pattern.substr(2), text) ||
+                   (!text.empty() &&
+                    (pattern[0] == '.' || pattern[0] == text[0]) &&
+                    match_recursive(pattern.substr(2), text.substr(1)));
+        }
+        if (pattern[1] == '+') {
+            return !text.empty() &&
+                   (pattern[0] == '.' || pattern[0] == text[0]) &&
+                   (match_recursive(pattern, text.substr(1)) ||
+                    match_recursive(pattern.substr(2), text.substr(1)));
+        }
+    }
+
+    // If text is empty here, fail
+    if (text.empty()) return false;
+
+    // Handle \d (digit class)
+    if (pattern[0] == '\\' && pattern.length() > 1) {
+        if (pattern[1] == 'd') {
+            if (!text.empty() && isdigit(text[0])) {
+                return match_recursive(pattern.substr(2), text.substr(1));
+            } else {
+                return false;
             }
         }
     }
 
-    // Handle single characters
-    if (text.empty()) return false;
-
+    // Handle literal match or dot
     if (pattern[0] == '.' || pattern[0] == text[0]) {
         return match_recursive(pattern.substr(1), text.substr(1));
     }
