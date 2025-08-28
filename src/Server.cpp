@@ -82,22 +82,23 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
         return -1;
     }
 
-    // Handle capturing group
-    if (pattern[0] == '(') {
-        string group_content = pattern.substr(1, atom_len - 2);
-        int current_capture_index = ++group_count;
+    // Replace the capturing group section with greedy matching
+if (pattern[0] == '(') {
+    string group_content = pattern.substr(1, atom_len - 2);
+    int current_capture_index = ++group_count;
 
-        for (int len = 0; len <= (int)text.size(); ++len) {
-            int group_len = match_recursive(group_content, text.substr(0, len), group_count);
-            if (group_len != -1) {
-                captured_group[current_capture_index] = text.substr(0, group_len);
-                int rest_len = match_recursive(rest, text.substr(group_len), group_count);
-                if (rest_len != -1) return group_len + rest_len;
-                captured_group.erase(current_capture_index); // backtrack
-            }
+    // Greedy: try longest possible match first
+    for (int len = (int)text.size(); len >= 0; --len) {
+        int group_len = match_recursive(group_content, text.substr(0, len), group_count);
+        if (group_len != -1) {
+            captured_group[current_capture_index] = text.substr(0, group_len);
+            int rest_len = match_recursive(rest, text.substr(group_len), group_count);
+            if (rest_len != -1) return group_len + rest_len;
+            captured_group.erase(current_capture_index); // backtrack
         }
-        return -1;
     }
+    return -1;
+}
 
     if (text.empty()) return -1;
 
