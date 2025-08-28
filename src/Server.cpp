@@ -76,20 +76,30 @@ bool match_recursive(const string& pattern, const string& text) {
             }
 
             // Handle group followed by +
-            if (!after_group.empty() && after_group[0] == '+') {
-                // Must match at least once
-                if (!match_recursive(group_content, text)) return false;
+if (!after_group.empty() && after_group[0] == '+') {
+    string rest = after_group.substr(1);
+    string remaining = text;
 
-                // Try consuming progressively more of `text` with repeated group
-                for (size_t i = 0; i <= text.size(); ++i) {
-                    if (match_recursive(group_content, text.substr(0, i))) {
-                        if (match_recursive("(" + group_content + ")+" + after_group.substr(1), text.substr(i))) {
-                            return true;
-                        }
-                    }
+    // Must match the group at least once
+    if (!match_recursive(group_content, remaining)) return false;
+
+    // Consume group repeatedly
+    while (!remaining.empty() && match_recursive(group_content, remaining)) {
+        // Try moving forward after consuming one group
+        for (size_t cut = 1; cut <= remaining.size(); ++cut) {
+            if (match_recursive(group_content, remaining.substr(0, cut))) {
+                if (match_recursive("(" + group_content + ")*" + rest, remaining.substr(cut))) {
+                    return true;
                 }
-                return false;
             }
+        }
+        break;
+    }
+
+    // Or just continue with the rest of the pattern
+    return match_recursive(rest, remaining);
+}
+
 
             // Handle group followed by ?
             if (!after_group.empty() && after_group[0] == '?') {
