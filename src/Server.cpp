@@ -1,125 +1,103 @@
 #include <iostream>
+#include <fstream>
 #include <string>
+#include <cctype>
+#include "include/RegParser.h"
 
+// When DEBUG is defined, the program will print the parsed structure of the regex.
+#define DEBUG
 
-bool match_digits(const std::string& inputs, const std::string& pattern) {
-    for (auto input : inputs) {
-        if (isdigit(input)) {
-            return true;
-        }
+#ifdef DEBUG
+void printDebug(const std::vector<Re>& reList);
+
+void printQuantifier(const Re& re) {
+    switch (re.quantifier) {
+        case PLUS: std::cout << "+"; break;
+        case MARK: std::cout << "?"; break;
+        case STAR: std::cout << "*"; break;
+        default: break;
     }
-    return false;
 }
 
-bool match_alphanum(const std::string& inputs, const std::string& pattern){
-    for (auto c : inputs) {
-        if (isalnum(c)) {
-            return true;
+void printDebug(const std::vector<Re>& reList) {
+    for (const auto& tmp : reList) {
+        switch (tmp.type) {
+            case DIGIT: std::cout << "DIGIT"; break;
+            case ALPHANUM: std::cout << "ALPHANUM"; break;
+            case SINGLE_CHAR: std::cout << "SINGLE CHAR" << " >> " << tmp.ccl; break;
+            case ALT:
+                std::cout << "ALT" << " >> " << std::endl;
+                std::cout << "(" << std::endl;
+                for (size_t i = 0; i < tmp.alternatives.size(); ++i) {
+                    printDebug(tmp.alternatives[i]);
+                    if (i < tmp.alternatives.size() - 1)
+                        std::cout << "|" << std::endl;
+                }
+                std::cout << ")";
+                break;
+            case LIST: std::cout << (tmp.isNegative ? "NEGATIVE " : "") << "LIST" << " >> " << tmp.ccl; break;
+            case START: std::cout << "START"; break;
+            case END: std::cout << "END"; break;
+            case ETK: std::cout << "ETK"; break;
+            default: std::cout << "UNKNOWN"; break;
         }
+        printQuantifier(tmp);
+        std::cout << std::endl;
     }
-    return false;
 }
+#endif
 
-bool match_group(const std::string& input_line, const std::string& pattern) {
-    return input_line.find_first_of(pattern) != std::string::npos;
-    //returns the position of the first occurrence of any character that is present in the argument string
-}
+// The main matching function that uses your RegParser class
+bool match_pattern(const std::string& input_line, const std::string& pattern) {
+    RegParser rp(pattern);
 
-bool match_pattern(const std::string& input_line, const std::string& pattern, bool start_of_line = true) {
-    if(pattern.size()==0) return true;
-    if(pattern[0]=='$') {
-        if(input_line.empty()) {
-            return true; 
-        }
-        else{
-            return false;
-        }   
-    }
-    if(input_line.size()==0) return false;
+    if (rp.parse()) {
+#ifdef DEBUG
+        std::cerr << "--- Parsed Regex Structure ---" << std::endl;
+        printDebug(rp.regex);
+        std::cerr << "----------------------------" << std::endl;
+#endif
+        const char* c = input_line.c_str();
+        bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
 
-    if (pattern[0] == '(' && pattern.find('|') != std::string::npos) {
-        std::string subpattern1= pattern.substr(1, pattern.find('|') - 1);
-        std::string subpattern2 = pattern.substr(pattern.find('|') + 1, pattern.find(')') - pattern.find('|') - 1);
-        return match_pattern(input_line, subpattern1, start_of_line) || match_pattern(input_line, subpattern2, start_of_line);
-    }
-
-    if (pattern.size() > 1 &&pattern[1] == '+') {
-        char target = pattern[0];
-        size_t i = 0;
-        while (i < input_line.size() && input_line[i] == target) {
-            i++;
-        }
-        return i > 0 && match_pattern(input_line.substr(i), pattern.substr(2), false);
-    }
-    if (pattern.size() > 1 && pattern[1] == '?') {
-        if (pattern[0] == input_line[0]) {
-            return match_pattern(input_line.substr(1), pattern.substr(2), false) ||
-                   match_pattern(input_line, pattern.substr(2), false);
+        if (hasStartAnchor) {
+            return RegParser::match_from_position(&c, rp.regex, 1);
         } else {
-            return match_pattern(input_line, pattern.substr(2), false);
-        }
-    }
-    if (pattern[0] == '.') {
-        return match_pattern(input_line.substr(1), pattern.substr(1), false);
-    }   
-    if (pattern.substr(0,2) == "\\d") {
-        if(isdigit(input_line[0])){
-            return match_pattern(input_line.substr(1), pattern.substr(2), false);
-        }
-        return match_pattern(input_line.substr(1), pattern, false);
-    }
-
-    else if (pattern.substr(0,2) == "\\w") {
-        if(isalnum(input_line[0])){
-            return match_pattern(input_line.substr(1), pattern.substr(2), false);
-        }
-        return match_pattern(input_line.substr(1), pattern, false);
-    }
-
-    else if(pattern[0]=='['){
-        auto first = pattern.find(']');
-        bool neg = pattern[1]=='^';
-        if(neg){
-            if(!match_group(input_line,pattern.substr(2,first-1))){
-                return match_pattern(input_line.substr(1),pattern.substr(first+1), false);
+            // --- START OF CORRECTIONS ---
+            while (*c != '\0') {
+                // Use a temporary pointer for each match attempt.
+                // This prevents the main loop's pointer `c` from being
+                // incorrectly advanced by a partial match.
+                const char* temp_c = c;
+                if (RegParser::match_from_position(&temp_c, rp.regex, 0)) {
+                    return true;
+                }
+                c++; // Safely advance to the next character for the next attempt.
             }
+
+            // After the loop, we must also check if the pattern can match
+            // an empty string at the very end of the input.
+            const char* end_of_string = c;
+             if (RegParser::match_from_position(&end_of_string, rp.regex, 0)) {
+                return true;
+            }
+
             return false;
+            // --- END OF CORRECTIONS ---
         }
-        if(match_group(input_line,pattern.substr(1,first-1))){
-            return match_pattern(input_line.substr(1),pattern.substr(first+1), false);
-        }
-        else
-        return false;
+    } else {
+        throw std::runtime_error("Invalid pattern: " + pattern);
     }
-
-    if (pattern[0] == input_line[0]) {
-        return match_pattern(input_line.substr(1), pattern.substr(1), false);
-    }
-    else if(start_of_line){
-        return false;
-    }
-    return match_pattern(input_line.substr(1), pattern, false);
-}
-
-// Update match_patterns function
-bool match_patterns(const std::string& input_line, const std::string& pattern) {
-    if (pattern[0] == '^') {
-        return match_pattern(input_line, pattern.substr(1), true);
-    }
-    
-    return match_pattern(input_line, pattern, false);
 }
 
 int main(int argc, char* argv[]) {
-    // Flush after every std::cout / std::cerr
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
 
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    std::cout << "Logs from your program will appear here" << std::endl;
+    std::cerr << "Logs from your program will appear here" << std::endl;
 
     if (argc != 3) {
-        std::cerr << "Expected two arguments" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " -E \"<pattern>\"" << std::endl;
         return 1;
     }
 
@@ -133,12 +111,15 @@ int main(int argc, char* argv[]) {
 
     std::string input_line;
     std::getline(std::cin, input_line);
-    
+
     try {
-        bool result = match_patterns(input_line, pattern);
-        return result ? 0 : 1;
+        if (match_pattern(input_line, pattern)) {
+            return 0;
+        } else {
+            return 1;
+        }
     } catch (const std::runtime_error& e) {
-        std::cerr << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
 }
