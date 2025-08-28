@@ -10,9 +10,40 @@ using namespace std;
 // Forward declaration
 bool match_here(const string& pattern, size_t pattern_idx, const string& text, size_t text_idx);
 
+// Function to match a group or single atom with quantifiers '?' or '+'
+bool match_quantified_group(const string& group_pattern, const string& after_pattern, const string& text, size_t text_idx, char quantifier) {
+    if (quantifier == '?') {
+        // zero or one times
+        return match_here(group_pattern + after_pattern, 0, text, text_idx) || 
+               match_here(after_pattern, 0, text, text_idx);
+    } else if (quantifier == '+') {
+        size_t idx = text_idx;
+        // match group_pattern at least once
+        if (!match_here(group_pattern, 0, text, idx)) {
+            return false;
+        }
+        idx++; // advance by 1 char or by group length — here we rely on recursive match to advance more internally
+        
+        // because group_pattern length is unknown, we must rely on recursion backtracking
+        // so we try greedy matching: match as many occurrences as possible
+        size_t last_idx = idx;
+        while (true) {
+            if (match_here(group_pattern, 0, text, idx)) {
+                idx++; // try to consume one more occurrence
+                last_idx = idx;
+            } else {
+                break;
+            }
+        }
+        // try matching after_pattern from last position after greedy matches
+        return match_here(after_pattern, 0, text, last_idx);
+    }
+    // unsupported quantifier
+    return false;
+}
+
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.empty()) return true;
-    // Correct check for start anchor '^'
     if (!pattern.empty() && pattern[0] == '^') {
         return match_here(pattern, 1, input_line, 0);
     }
@@ -27,12 +58,11 @@ bool match_pattern(const string& input_line, const string& pattern) {
 bool match_here(const string& pattern, size_t pattern_idx, const string& text, size_t text_idx) {
     if (pattern_idx == pattern.size()) return true;
 
-    // Handle '$' anchor at end of pattern
     if (pattern[pattern_idx] == '$' && pattern_idx == pattern.size() - 1) {
         return text_idx == text.size();
     }
 
-    // Handle grouping and alternation (e.g. (cat|dog|cow))
+    // Handle grouping and alternation (e.g., (cat|dog|cow)) with possible quantifier after group
     if (pattern[pattern_idx] == '(') {
         size_t end_paren = string::npos;
         vector<size_t> pipes;
@@ -48,26 +78,46 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
                 pipes.push_back(i);
             }
         }
-        if (end_paren != string::npos) {
-            string after_group = pattern.substr(end_paren + 1);
-            size_t start = pattern_idx + 1;
-            vector<pair<size_t, size_t>> alternatives;
-            for (size_t k = 0; k <= pipes.size(); ++k) {
-                size_t pipe_pos = (k < pipes.size()) ? pipes[k] : end_paren;
-                alternatives.push_back(make_pair(start, pipe_pos));
-                start = pipe_pos + 1;
-            }
-            for (const auto& alt : alternatives) {
-                string alt_pattern = pattern.substr(alt.first, alt.second - alt.first) + after_group;
-                if (match_here(alt_pattern, 0, text, text_idx)) {
+        if (end_paren == string::npos) {
+            // malformed pattern no closing ')'
+            throw runtime_error("Unmatched '(' in pattern");
+        }
+
+        string after_group = pattern.substr(end_paren + 1);
+        char quantifier = (end_paren + 1 < pattern.size()) ? pattern[end_paren + 1] : 0;
+
+        size_t start = pattern_idx + 1;
+        vector<pair<size_t, size_t>> alternatives;
+        for (size_t k = 0; k <= pipes.size(); ++k) {
+            size_t pipe_pos = (k < pipes.size()) ? pipes[k] : end_paren;
+            alternatives.push_back(make_pair(start, pipe_pos));
+            start = pipe_pos + 1;
+        }
+
+        // Build strings for all alternatives + after_group
+        vector<string> alt_patterns;
+        for (const auto& alt : alternatives) {
+            alt_patterns.push_back(pattern.substr(alt.first, alt.second - alt.first));
+        }
+
+        // If quantifier is '?' or '+', handle group quantifier
+        if (quantifier == '?' || quantifier == '+') {
+            for (const auto& alt_pat : alt_patterns) {
+                if (match_quantified_group(alt_pat, after_group.substr(1), text, text_idx, quantifier)) {
                     return true;
                 }
+            }
+            return false;
+        } else {
+            // No quantifier, just try each alternative followed by after_group normally
+            for (const auto& alt_pat : alt_patterns) {
+                if (match_here(alt_pat + after_group, 0, text, text_idx)) return true;
             }
             return false;
         }
     }
 
-    // Handle quantifiers: '?' and '+'
+    // Handle single char quantifiers '?' and '+'
     if (pattern_idx + 1 < pattern.size()) {
         char quantifier = pattern[pattern_idx + 1];
         if (quantifier == '?') {
@@ -75,8 +125,7 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
                     (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx]) &&
                     match_here(pattern, pattern_idx + 2, text, text_idx + 1)) ||
                    match_here(pattern, pattern_idx + 2, text, text_idx);
-        }
-        if (quantifier == '+') {
+        } else if (quantifier == '+') {
             if (text_idx < text.size() &&
                 (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx])) {
                 return match_here(pattern, pattern_idx, text, text_idx + 1) ||
@@ -86,7 +135,7 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
         }
     }
 
-    // Handle character class [..] and negated [^..]
+    // Character class //
     if (pattern[pattern_idx] == '[') {
         size_t end_bracket = pattern.find(']', pattern_idx);
         if (end_bracket != string::npos && text_idx < text.size()) {
@@ -101,7 +150,7 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
         return false;
     }
 
-    // Handle escaped sequences \d and \w
+    // Escaped characters
     if (pattern[pattern_idx] == '\\' && pattern_idx + 1 < pattern.size()) {
         if (text_idx < text.size()) {
             char meta = pattern[pattern_idx + 1];
@@ -113,7 +162,6 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
         return false;
     }
 
-    // Default: literal characters or '.'
     if (text_idx < text.size() &&
         (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx])) {
         return match_here(pattern, pattern_idx + 1, text, text_idx + 1);
@@ -125,23 +173,18 @@ bool match_here(const string& pattern, size_t pattern_idx, const string& text, s
 int main(int argc, char* argv[]) {
     cout << unitbuf;
     cerr << unitbuf;
-
     if (argc != 3) {
         cerr << "Expected two arguments" << endl;
         return 1;
     }
-
     string flag = argv[1];
     string pattern = argv[2];
-
     if (flag != "-E") {
         cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
-
     string input_line;
     getline(cin, input_line);
-
     try {
         if (match_pattern(input_line, pattern)) {
             return 0;
