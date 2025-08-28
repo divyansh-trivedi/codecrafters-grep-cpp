@@ -3,635 +3,277 @@
 #include <vector>
 #include <cctype>
 #include <stdexcept>
-#include <fstream>
-#include <algorithm> // For std::copy
-#include <cstring>   // For strlen and strcpy
 
 using namespace std;
 
-// --- Start of RegParser.h content ---
-
-typedef enum
-{
-    NONE,
-    PLUS,
-    STAR,
-    MARK
-} Quantifier;
-
-typedef enum
-{
-    SINGLE_CHAR,
-    DIGIT,
-    ALPHANUM,
-    START,
-    END,
-    LIST,
-    ALT,
-    ETK, // Error Token
-} RegType;
-
-struct Re; // Forward declaration for recursive struct
-struct Re
-{
-    RegType type;
-    char* ccl; // Character class list or single char
-    bool isNegative;
-    Quantifier quantifier;
-    std::vector<std::vector<Re>> alternatives;
-
-    // Destructor to free allocated memory
-    ~Re() {
-        delete[] ccl;
+// Find index of matching closing ')' for '(' at start
+int findClosingParen(const string& pattern, int start) {
+    int depth = 0;
+    for (size_t i = start; i < pattern.size(); i++) {
+        if (pattern[i] == '(') depth++;
+        else if (pattern[i] == ')') depth--;
+        if (depth == 0) return i;
     }
-
-    // Default constructor
-    Re() : type(ETK), ccl(nullptr), isNegative(false), quantifier(NONE) {}
-
-    // Copy constructor
-    Re(const Re& other) {
-        type = other.type;
-        isNegative = other.isNegative;
-        quantifier = other.quantifier;
-        alternatives = other.alternatives;
-        if (other.ccl) {
-            ccl = new char[strlen(other.ccl) + 1];
-            strcpy(ccl, other.ccl);
-        } else {
-            ccl = nullptr;
-        }
-    }
-
-    // Copy assignment operator
-    Re& operator=(const Re& other) {
-        if (this == &other) {
-            return *this;
-        }
-        delete[] ccl;
-        type = other.type;
-        isNegative = other.isNegative;
-        quantifier = other.quantifier;
-        alternatives = other.alternatives;
-        if (other.ccl) {
-            ccl = new char[strlen(other.ccl) + 1];
-            strcpy(ccl, other.ccl);
-        } else {
-            ccl = nullptr;
-        }
-        return *this;
-    }
-};
-
-class RegParser
-{
-public:
-    RegParser(const std::string& pattern)
-    {
-        _pattern_str = pattern;
-        _pattern = _pattern_str.c_str();
-        _begin = _pattern;
-        _end = _begin + _pattern_str.size();
-    };
-
-    bool parse();
-    Re makeRe(RegType type, char* ccl = nullptr, bool isNegative = false);
-
-    static bool match_current(const char* c, const std::vector<Re>& regex, int idx);
-    static bool match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx);
-    static bool match_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
-    
-    std::vector<Re> regex;
-
-private:
-    std::string _pattern_str;
-    const char* _pattern{nullptr};
-    const char* _begin{nullptr};
-    const char* _end{nullptr};
-
-    bool isEof();
-    bool consume();
-    bool check(char c);
-    bool match(char c);
-
-    Re parseElement();
-    Re parseCharacterClass();
-    Re parseGroup();
-    void applyQuantifiers(Re& element);
-};
-
-// --- End of RegParser.h content ---
-// --- Start of RegParser.cpp content ---
-
-bool RegParser::parse()
-{
-    while (!isEof())
-    {
-        Re element = parseElement();
-        if (element.type == ETK)
-            return false;
-        regex.push_back(element);
-    }
-    return true;
+    return -1;
 }
 
-Re RegParser::makeRe(RegType type, char* ccl, bool isNegative)
-{
-    Re current;
-    current.type = type;
-    current.ccl = ccl;
-    current.isNegative = isNegative;
-    current.quantifier = NONE;
-    return current;
+// Split top-level alternation '|'
+vector<string> splitAlternation(const string& group) {
+    vector<string> options;
+    int depth = 0;
+    size_t last = 0;
+    for (size_t i = 0; i < group.size(); i++) {
+        if (group[i] == '(') depth++;
+        else if (group[i] == ')') depth--;
+        else if (group[i] == '|' && depth == 0) {
+            options.push_back(group.substr(last, i - last));
+            last = i + 1;
+        }
+    }
+    options.push_back(group.substr(last));
+    return options;
 }
 
-bool RegParser::match_current(const char* c, const std::vector<Re>& regex, int idx)
-{
-    if (*c == '\0') {
-        return regex[idx].type == END;
-    }
-
-    const Re* current = &regex[idx];
-    switch (current->type)
-    {
-    case DIGIT:
-        return isdigit(*c);
-    case ALPHANUM:
-        return isalnum(*c) || *c == '_';
-    case SINGLE_CHAR:
-        return *c == *current->ccl || *current->ccl == '.';
-    case LIST:
-    {
-        const char* p = current->ccl;
-        bool found = false;
-        while (*p != '\0')
-        {
-            if (*c == *p)
-            {
-                found = true;
-                break;
-            }
-            ++p;
-        }
-        return current->isNegative ? !found : found;
-    }
-    case START:
+// Match a single character, return number of chars consumed in pattern
+bool matchChar(char c, const string& patt, size_t& consumed) {
+    consumed = 0;
+    if (patt.empty()) return false;
+    if (patt[0] == '.') {
+        consumed = 1;
         return true;
-    case END:
-        return *c == '\0';
-    default:
-        return false;
     }
+    if (patt.size() >= 2) {
+        if (patt.substr(0,2) == "\\d") {
+            consumed = 2;
+            return isdigit(c);
+        }
+        if (patt.substr(0,2) == "\\w") {
+            consumed = 2;
+            return isalnum(c) || c == '_';
+        }
+    }
+    if (patt[0] == '[') {
+        size_t close = patt.find(']');
+        if (close == string::npos) return false;
+        bool neg = patt[1] == '^';
+        size_t start = neg ? 2 : 1;
+        string chars = patt.substr(start, close - start);
+        bool found = chars.find(c) != string::npos;
+        consumed = close + 1;
+        return neg ? !found : found;
+    }
+    consumed = 1;
+    return patt[0] == c;
 }
 
-bool RegParser::match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx)
-{
-    const char* c = *start_pos;
-    int rIdx = idx;
-    int pattern_length = regex.size();
+// Recursive match; returns length matched or -1 if no match
+int matchCore(const string& input, const string& pattern);
 
-    while (rIdx < pattern_length)
-    {
-        const Re& current = regex[rIdx];
-        
-        if (current.quantifier == PLUS) {
-            const char* temp_c = c;
-            if (current.type == ALT) {
-                if(match_alt_one_or_more(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            } else {
-                if(match_one_or_more(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            }
-            return false;
-        }
-        
-        if (current.quantifier == MARK) {
-            const char* temp_c = c;
-            if (current.type == ALT) {
-                if(match_alt_zero_or_one(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            } else {
-                if(match_zero_or_one(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            }
-            return false;
-        }
+int matchStar(const string& c, const string& pattern, const string& input) {
+    // Match zero or more c's followed by pattern on input
+    for (size_t i = 0; i <= input.size(); i++) {
+        if (i > 0 && input.compare(i - c.size(), c.size(), c) != 0) break;
+        int rest = matchCore(input.substr(i), pattern);
+        if (rest != -1) return i + rest;
+    }
+    return -1;
+}
 
-        if (current.type == ALT) {
-            for (const auto& alt : current.alternatives) {
-                const char* temp_c = c;
-                if (match_from_position(&temp_c, alt, 0)) {
-                    if (match_from_position(&temp_c, regex, rIdx + 1)) {
-                        *start_pos = temp_c;
-                        return true;
+int matchCore(const string& input, const string& pattern) {
+    if (pattern.empty()) return 0;
+    if (pattern[0] == '$') return input.empty() ? 0 : -1;
+    if (input.empty() && pattern[0] != '$') return -1;
+
+    // Handle alternation at top level
+    int depth = 0;
+    for (int i = (int)pattern.size() - 1; i >= 0; i--) {
+        if (pattern[i] == ')') depth++;
+        else if (pattern[i] == '(') depth--;
+        else if (pattern[i] == '|' && depth == 0) {
+            string left = pattern.substr(0, i);
+            string right = pattern.substr(i + 1);
+            int leftMatch = matchCore(input, left);
+            if (leftMatch != -1) return leftMatch;
+            return matchCore(input, right);
+        }
+    }
+
+    // Handle group
+    if (pattern[0] == '(') {
+        int close = findClosingParen(pattern, 0);
+        if (close == -1) throw runtime_error("Unmatched '('");
+        string group = pattern.substr(1, close - 1);
+        string rest = (close + 1 < pattern.size()) ? pattern.substr(close + 1) : "";
+
+        // check quantifier after group
+        char quant = !rest.empty() && (rest[0] == '*' || rest[0] == '+' || rest[0] == '?') ? rest[0] : 0;
+        if (quant) rest = rest.substr(1);
+
+        vector<string> options = splitAlternation(group);
+        if (quant == '*') {
+            // zero or more times group then rest
+            if (matchCore(input, rest) != -1) return matchCore(input, rest);
+            size_t pos = 0;
+            while (pos < input.size()) {
+                bool matched = false;
+                for (const auto& alt : options) {
+                    int len = matchCore(input.substr(pos), alt);
+                    if (len != -1) {
+                        pos += len;
+                        matched = true;
+                        break;
                     }
                 }
+                if (!matched) break;
+                int rest_match = matchCore(input.substr(pos), rest);
+                if (rest_match != -1) return pos + rest_match;
             }
-            return false;
+            return -1;
         }
-
-        if (!match_current(c, regex, rIdx)) {
-            return false;
-        }
-
-        if (current.type != START) {
-            c++;
-        }
-        rIdx++;
-    }
-
-    *start_pos = c;
-    return true;
-}
-
-bool RegParser::match_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const char* t = *c;
-    if (!match_current(t, regex, idx))
-        return false;
-    t++;
-
-    while (*t != '\0' && match_current(t, regex, idx))
-    {
-        t++;
-    }
-
-    while (t >= *c)
-    {
-        const char* test_pos = t;
-        if (match_from_position(&test_pos, regex, idx + 1))
-        {
-            *c = test_pos;
-            return true;
-        }
-        if (t == *c) break;
-        t--;
-    }
-    return false;
-}
-
-bool RegParser::match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const Re& altGp = regex[idx];
-    const char* original_pos = *c;
-
-    // Must match at least once
-    bool matched_once = false;
-    const char* first_match_end = original_pos;
-    for(const auto& alt : altGp.alternatives) {
-        const char* temp_pos = original_pos;
-        if(match_from_position(&temp_pos, alt, 0) && temp_pos > original_pos) {
-            first_match_end = temp_pos;
-            matched_once = true;
-            break;
-        }
-    }
-    if (!matched_once) return false;
-
-    const char* pos = first_match_end;
-    while(true) {
-        const char* current_match_end = pos;
-        bool found_match = false;
-        for (const auto& alt : altGp.alternatives) {
-            const char* temp_pos = pos;
-            if (match_from_position(&temp_pos, alt, 0) && temp_pos > pos) {
-                current_match_end = temp_pos;
-                found_match = true;
-                break;
-            }
-        }
-
-        if (!found_match) break;
-        pos = current_match_end;
-    }
-
-    while (pos >= first_match_end) {
-        const char* temp_pos = pos;
-        if (match_from_position(&temp_pos, regex, idx + 1)) {
-            *c = temp_pos;
-            return true;
-        }
-        if (pos == first_match_end) break;
-        pos--;
-    }
-     // Check if matching just once is enough
-    const char* temp_pos_once = first_match_end;
-    if (match_from_position(&temp_pos_once, regex, idx + 1)) {
-        *c = temp_pos_once;
-        return true;
-    }
-    
-    return false;
-}
-
-bool RegParser::match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const char* temp_pos = *c;
-    if (match_current(temp_pos, regex, idx))
-    {
-        temp_pos++;
-        if (match_from_position(&temp_pos, regex, idx + 1))
-        {
-            *c = temp_pos;
-            return true;
-        }
-    }
-    return match_from_position(c, regex, idx + 1);
-}
-
-bool RegParser::match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
-{
-    // Path 1: Match the group
-    const Re& altGp = regex[idx];
-    for (const auto& alt : altGp.alternatives)
-    {
-        const char* t = *c;
-        if (match_from_position(&t, alt, 0))
-        {
-            if (match_from_position(&t, regex, idx + 1))
-            {
-                *c = t;
-                return true;
-            }
-        }
-    }
-    // Path 2: Skip the group
-    return match_from_position(c, regex, idx + 1);
-}
-
-bool RegParser::isEof()
-{
-    return _pattern >= _end;
-}
-
-bool RegParser::consume()
-{
-    if (!isEof())
-    {
-        _pattern++;
-        return true;
-    }
-    return false;
-}
-
-bool RegParser::check(char c)
-{
-    return !isEof() && *_pattern == c;
-}
-
-bool RegParser::match(char c)
-{
-    if (check(c))
-        return consume();
-    return false;
-}
-
-Re RegParser::parseElement()
-{
-    if (check('^')) {
-        consume();
-        return makeRe(START);
-    }
-    if (check('$')) {
-        consume();
-        return makeRe(END);
-    }
-    if (check('\\')) {
-        consume();
-        if (isEof()) return makeRe(ETK);
-        Re current;
-        if (check('d')) {
-            current = makeRe(DIGIT);
-        } else if (check('w')) {
-            current = makeRe(ALPHANUM);
-        } else {
-            char* cstr = new char[2];
-            cstr[0] = *_pattern;
-            cstr[1] = '\0';
-            current = makeRe(SINGLE_CHAR, cstr);
-        }
-        consume();
-        applyQuantifiers(current);
-        return current;
-    }
-    if (check('[')) {
-        consume();
-        return parseCharacterClass();
-    }
-    if (check('(')) {
-        consume();
-        return parseGroup();
-    }
-    if (!isEof()) {
-        char* cstr = new char[2];
-        cstr[0] = *_pattern;
-        cstr[1] = '\0';
-        consume();
-        Re current = makeRe(SINGLE_CHAR, cstr);
-        applyQuantifiers(current);
-        return current;
-    }
-    return makeRe(ETK);
-}
-
-Re RegParser::parseCharacterClass()
-{
-    Re current = makeRe(LIST);
-    std::string buffer;
-
-    current.isNegative = match('^');
-    while (!isEof() && !check(']'))
-    {
-        buffer.push_back(*_pattern);
-        consume();
-    }
-
-    if (!match(']'))
-    {
-        return makeRe(ETK);
-    }
-
-    char* cstr = new char[buffer.size() + 1];
-    std::copy(buffer.begin(), buffer.end(), cstr);
-    cstr[buffer.size()] = '\0';
-    current.ccl = cstr;
-    applyQuantifiers(current);
-    return current;
-}
-
-Re RegParser::parseGroup()
-{
-    Re altGp = makeRe(ALT);
-    std::vector<Re> current_sequence;
-    bool isClosed = false;
-
-    while (!isEof())
-    {
-        if (check('|')) {
-            consume();
-            altGp.alternatives.push_back(current_sequence);
-            current_sequence.clear();
-        } else if (check(')')) {
-            consume();
-            altGp.alternatives.push_back(current_sequence);
-            isClosed = true;
-            break;
-        } else {
-            Re element = parseElement();
-            if (element.type == ETK) return makeRe(ETK);
-            current_sequence.push_back(element);
-        }
-    }
-
-    if (!isClosed) return makeRe(ETK);
-
-    applyQuantifiers(altGp);
-    return altGp;
-}
-
-void RegParser::applyQuantifiers(Re& element)
-{
-    if (!isEof()) {
-        if (check('+')) {
-            element.quantifier = PLUS;
-            consume();
-        } else if (check('?')) {
-            element.quantifier = MARK;
-            consume();
-        }
-    }
-}
-
-// --- End of RegParser.cpp content ---
-// --- Start of Server.cpp content ---
-
-#ifdef DEBUG
-void printDebug(const std::vector<Re>& reList);
-#endif
-
-bool match_pattern(const std::string& input_line, const std::string& pattern)
-{
-    RegParser rp(pattern);
-
-    if (rp.parse())
-    {
-#ifdef DEBUG
-        std::cerr << "--- Parsed Regex Structure ---" << std::endl;
-        printDebug(rp.regex);
-        std::cerr << "----------------------------" << std::endl;
-#endif
-        const char* c = input_line.c_str();
-        bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
-
-        if (hasStartAnchor)
-        {
-            return RegParser::match_from_position(&c, rp.regex, 1);
-        }
-        else
-        {
-            while (*c != '\0')
-            {
-                const char* temp_c = c;
-                if (RegParser::match_from_position(&temp_c, rp.regex, 0))
-                {
-                    return true;
+        if (quant == '+') {
+            // one or more times
+            for (const auto& alt : options) {
+                int first_len = matchCore(input, alt);
+                if (first_len == -1) continue;
+                size_t pos = first_len;
+                while (pos < input.size()) {
+                    bool matched = false;
+                    for (const auto& alt2 : options) {
+                        int len2 = matchCore(input.substr(pos), alt2);
+                        if (len2 != -1) {
+                            pos += len2;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) break;
+                    int rest_match = matchCore(input.substr(pos), rest);
+                    if (rest_match != -1) return pos + rest_match;
                 }
-                c++;
+                int rest_match = matchCore(input.substr(pos), rest);
+                if (rest_match != -1) return pos + rest_match;
             }
-            const char* end_of_string = c;
-            if (RegParser::match_from_position(&end_of_string, rp.regex, 0)) {
-                return true;
+            return -1;
+        }
+        if (quant == '?') {
+            // zero or one times
+            int zero_match = matchCore(input, rest);
+            if (zero_match != -1) return zero_match;
+            for (const auto& alt : options) {
+                int one_len = matchCore(input, alt);
+                if (one_len == -1) continue;
+                int rest_match = matchCore(input.substr(one_len), rest);
+                if (rest_match != -1) return one_len + rest_match;
             }
-            return false;
+            return -1;
+        }
+        // no quantifier - must match group then rest
+        for (const auto& alt : options) {
+            int one_len = matchCore(input, alt);
+            if (one_len == -1) continue;
+            int rest_match = matchCore(input.substr(one_len), rest);
+            if (rest_match != -1) return one_len + rest_match;
+        }
+        return -1;
+    }
+
+    // Single char quantifiers '*', '+', '?'
+    if (pattern.size() > 1 && (pattern[1] == '*' || pattern[1] == '+' || pattern[1] == '?')) {
+        string c = pattern.substr(0,1);
+        char quant = pattern[1];
+        string rest = pattern.substr(2);
+
+        if (quant == '*') return matchStar(c, rest, input);
+
+        if (quant == '+') {
+            int first_match = matchCore(input, c);
+            if (first_match == -1) return -1;
+            int all_match = matchStar(c, rest, input.substr(first_match));
+            return all_match == -1 ? -1 : first_match + all_match;
+        }
+
+        if (quant == '?') {
+            int skip_match = matchCore(input, rest);
+            if (skip_match != -1) return skip_match;
+            int one_match = matchCore(input, c);
+            if (one_match == -1) return -1;
+            int rest_match = matchCore(input.substr(one_match), rest);
+            if (rest_match == -1) return -1;
+            return one_match + rest_match;
         }
     }
-    else
-    {
-        throw std::runtime_error("Invalid pattern: " + pattern);
+
+    // Character classes
+    if (!pattern.empty() && pattern[0] == '[') {
+        size_t close = pattern.find(']');
+        if (close == string::npos) return -1;
+        bool neg = pattern[1] == '^';
+        size_t start = neg ? 2 : 1;
+        string chars = pattern.substr(start, close - start);
+        if (input.empty()) return -1;
+        bool found = chars.find(input[0]) != string::npos;
+        if (neg ? !found : found) {
+            int rest_match = matchCore(input.substr(1), pattern.substr(close+1));
+            if (rest_match == -1) return -1;
+            return 1 + rest_match;
+        }
+        return -1;
     }
+
+    // Escapes
+    if (pattern.size() >= 2 && pattern[0] == '\\') {
+        if (input.empty()) return -1;
+        if (pattern[1] == 'd' && isdigit(input[0])) {
+            int rest_match = matchCore(input.substr(1), pattern.substr(2));
+            if (rest_match == -1) return -1;
+            return 1 + rest_match;
+        }
+        if (pattern[1] == 'w' && (isalnum(input[0]) || input[0] == '_')) {
+            int rest_match = matchCore(input.substr(1), pattern.substr(2));
+            if (rest_match == -1) return -1;
+            return 1 + rest_match;
+        }
+        return -1;
+    }
+
+    // Literal or dot match
+    if (!pattern.empty() && !input.empty() &&
+        (pattern[0] == '.' || pattern[0] == input[0])) {
+        int rest_match = matchCore(input.substr(1), pattern.substr(1));
+        if (rest_match == -1) return -1;
+        return 1 + rest_match;
+    }
+
+    return -1;
 }
 
-int main(int argc, char* argv[])
-{
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
-
-    std::cerr << "Logs from your program will appear here" << std::endl;
-
-    if (argc != 3)
-    {
-        std::cerr << "Usage: " << argv[0] << " -E \"<pattern>\"" << std::endl;
-        return 1;
+bool match_pattern(const string& input_line, const string& pattern) {
+    if (!pattern.empty() && pattern[0] == '^') {
+        int matched = matchCore(input_line, pattern.substr(1));
+        return matched == (int)input_line.size();
     }
-
-    std::string flag = argv[1];
-    std::string pattern = argv[2];
-
-    if (flag != "-E")
-    {
-        std::cerr << "Expected first argument to be '-E'" << std::endl;
-        return 1;
+    for (size_t i = 0; i <= input_line.size(); i++) {
+        int matched = matchCore(input_line.substr(i), pattern);
+        if (matched != -1) return true;
     }
-
-    std::string input_line;
-    std::getline(std::cin, input_line);
-
-    try
-    {
-        if (match_pattern(input_line, pattern))
-        {
-            return 0;
-        }
-        else
-        {
-            return 1;
-        }
-    }
-    catch (const std::runtime_error& e)
-    {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
-    }
+    return false;
 }
 
-#ifdef DEBUG
-void printQuantifier(const Re& re);
+int main(int argc, char* argv[]) {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
 
-void printDebug(const std::vector<Re>& reList) {
-    for (const auto& tmp : reList) {
-        switch (tmp.type) {
-            case DIGIT: std::cout << "DIGIT"; break;
-            case ALPHANUM: std::cout << "ALPHANUM"; break;
-            case SINGLE_CHAR: std::cout << "SINGLE CHAR" << " >> " << tmp.ccl; break;
-            case ALT:
-                std::cout << "ALT" << " >> " << std::endl;
-                std::cout << "(" << std::endl;
-                for (size_t i = 0; i < tmp.alternatives.size(); ++i) {
-                    printDebug(tmp.alternatives[i]);
-                    if (i < tmp.alternatives.size() - 1)
-                        std::cout << "|" << std::endl;
-                }
-                std::cout << ")";
-                break;
-            case LIST: std::cout << (tmp.isNegative ? "NEGATIVE " : "") << "LIST" << " >> " << tmp.ccl; break;
-            case START: std::cout << "START"; break;
-            case END: std::cout << "END"; break;
-            case ETK: std::cout << "ETK"; break;
-            default: std::cout << "UNKNOWN"; break;
-        }
-        printQuantifier(tmp);
-        std::cout << std::endl;
+    if (argc != 3) {
+        cerr << "Expected two arguments\n";
+        return 1;
     }
+    if (string(argv[1]) != "-E") {
+        cerr << "Expected first argument to be '-E'\n";
+        return 1;
+    }
+    string input_line;
+    getline(cin, input_line);
+    string pattern = argv[2];
+
+    return match_pattern(input_line, pattern) ? 0 : 1;
 }
-#endif
