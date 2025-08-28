@@ -51,11 +51,11 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
         else if (pattern[i] == '|' && depth == 0) {
             string left = pattern.substr(0, i);
             string right = pattern.substr(i + 1);
+            int current_group_count = group_count; // Save state
             int len = match_recursive(left, text, group_count);
             if (len != -1) return len;
-            // Reset group count for the other branch of alternation
-            int right_group_count = group_count;
-            return match_recursive(right, text, right_group_count);
+            group_count = current_group_count; // Restore state for other branch
+            return match_recursive(right, text, group_count);
         }
     }
     
@@ -88,6 +88,7 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
     if (quantifier == '?') {
         int len = match_recursive(rest, text, group_count);
         if (len != -1) return len;
+        
         int atom_match_len = match_recursive(atom, text, group_count);
         if (atom_match_len != -1) {
             int rest_len = match_recursive(rest, text.substr(atom_match_len), group_count);
@@ -136,7 +137,7 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
             int group_num = pattern[1] - '0';
             if (captured_groups.count(group_num)) {
                 string captured = captured_groups[group_num];
-                if (text.rfind(captured, 0) == 0) {
+                if (text.rfind(captured, 0) == 0) { // C++20 text.starts_with(captured)
                     int rest_len = match_recursive(rest, text.substr(captured.length()), group_count);
                     if (rest_len != -1) return captured.length() + rest_len;
                 }
