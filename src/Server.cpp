@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <fstream>
 #include <algorithm> // For std::copy
+#include <cstring>   // For strlen and strcpy
 
 using namespace std;
 
@@ -42,7 +43,6 @@ struct Re
     // Destructor to free allocated memory
     ~Re() {
         delete[] ccl;
-        // The alternatives vector will handle its own memory
     }
 
     // Default constructor
@@ -87,7 +87,6 @@ class RegParser
 public:
     RegParser(const std::string& pattern)
     {
-        // We need to copy the pattern string because the original might go out of scope
         _pattern_str = pattern;
         _pattern = _pattern_str.c_str();
         _begin = _pattern;
@@ -150,7 +149,7 @@ Re RegParser::makeRe(RegType type, char* ccl, bool isNegative)
 
 bool RegParser::match_current(const char* c, const std::vector<Re>& regex, int idx)
 {
-    if (*c == '\0') { // Can't match anything at the end of the string (except END)
+    if (*c == '\0') {
         return regex[idx].type == END;
     }
 
@@ -179,7 +178,7 @@ bool RegParser::match_current(const char* c, const std::vector<Re>& regex, int i
         return current->isNegative ? !found : found;
     }
     case START:
-        return true; // This is handled by the initial position, always true here
+        return true;
     case END:
         return *c == '\0';
     default:
@@ -198,26 +197,41 @@ bool RegParser::match_from_position(const char** start_pos, const std::vector<Re
         const Re& current = regex[rIdx];
         
         if (current.quantifier == PLUS) {
+            const char* temp_c = c;
             if (current.type == ALT) {
-                return match_alt_one_or_more(start_pos, regex, rIdx);
+                if(match_alt_one_or_more(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
             } else {
-                return match_one_or_more(start_pos, regex, rIdx);
+                if(match_one_or_more(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
             }
+            return false;
         }
         
         if (current.quantifier == MARK) {
+            const char* temp_c = c;
             if (current.type == ALT) {
-                return match_alt_zero_or_one(start_pos, regex, rIdx);
+                if(match_alt_zero_or_one(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
             } else {
-                return match_zero_or_one(start_pos, regex, rIdx);
+                if(match_zero_or_one(&temp_c, regex, rIdx)) {
+                    *start_pos = temp_c;
+                    return true;
+                }
             }
+            return false;
         }
 
         if (current.type == ALT) {
             for (const auto& alt : current.alternatives) {
                 const char* temp_c = c;
                 if (match_from_position(&temp_c, alt, 0)) {
-                    // If one alternative matches, we continue with the rest of the main pattern
                     if (match_from_position(&temp_c, regex, rIdx + 1)) {
                         *start_pos = temp_c;
                         return true;
@@ -274,16 +288,18 @@ bool RegParser::match_alt_one_or_more(const char** c, const std::vector<Re>& reg
 
     // Must match at least once
     bool matched_once = false;
+    const char* first_match_end = original_pos;
     for(const auto& alt : altGp.alternatives) {
         const char* temp_pos = original_pos;
         if(match_from_position(&temp_pos, alt, 0) && temp_pos > original_pos) {
+            first_match_end = temp_pos;
             matched_once = true;
             break;
         }
     }
     if (!matched_once) return false;
 
-    const char* pos = *c;
+    const char* pos = first_match_end;
     while(true) {
         const char* current_match_end = pos;
         bool found_match = false;
@@ -300,16 +316,20 @@ bool RegParser::match_alt_one_or_more(const char** c, const std::vector<Re>& reg
         pos = current_match_end;
     }
 
-    while (pos >= *c) {
+    while (pos >= first_match_end) {
         const char* temp_pos = pos;
         if (match_from_position(&temp_pos, regex, idx + 1)) {
             *c = temp_pos;
             return true;
         }
-        if (pos == *c) break;
-        // This backtracking is tricky. A simpler greedy approach is often sufficient.
-        // For now, let's assume the longest match is what we backtrack from.
+        if (pos == first_match_end) break;
         pos--;
+    }
+     // Check if matching just once is enough
+    const char* temp_pos_once = first_match_end;
+    if (match_from_position(&temp_pos_once, regex, idx + 1)) {
+        *c = temp_pos_once;
+        return true;
     }
     
     return false;
@@ -388,7 +408,7 @@ Re RegParser::parseElement()
         return makeRe(END);
     }
     if (check('\\')) {
-        consume(); // Consume '\'
+        consume();
         if (isEof()) return makeRe(ETK);
         Re current;
         if (check('d')) {
@@ -396,13 +416,12 @@ Re RegParser::parseElement()
         } else if (check('w')) {
             current = makeRe(ALPHANUM);
         } else {
-            // Escaped literal character
             char* cstr = new char[2];
             cstr[0] = *_pattern;
             cstr[1] = '\0';
             current = makeRe(SINGLE_CHAR, cstr);
         }
-        consume(); // Consume the meta-character
+        consume();
         applyQuantifiers(current);
         return current;
     }
