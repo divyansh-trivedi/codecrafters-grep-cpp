@@ -1,188 +1,152 @@
 #include <iostream>
+#include <fstream>
 #include <string>
-#include <stdexcept>
 #include <cctype>
-#include <vector>
+#include "include/RegParser.h"
 
-using namespace std;
+// When DEBUG is defined, the program will print the parsed structure of the regex.
+// You can comment this out to disable the debug output.
+#define DEBUG
 
-// Forward declaration for the main recursive function
-int match_recursive(const string& pattern, const string& text);
+#ifdef DEBUG
+// Forward declaration for the recursive debug print function
+void printDebug(const std::vector<Re>& reList);
 
-// The main entry point for the regex engine.
-bool match_pattern(const string& input_line, const string& pattern) {
-    if (pattern.empty()) return true;
-
-    if (pattern[0] == '^') {
-        // For an anchored pattern, the match must consume the entire line.
-        return match_recursive(pattern.substr(1), input_line) == (int)input_line.length();
+// Helper to print the type of quantifier
+void printQuantifier(const Re& re) {
+    switch (re.quantifier) {
+        case PLUS:
+            std::cout << "+";
+            break;
+        case MARK:
+            std::cout << "?";
+            break;
+        case STAR:
+            std::cout << "*";
+            break;
+        default:
+            break;
     }
-
-    // For unanchored patterns, loop and try to match at every position.
-    for (size_t i = 0; i <= input_line.length(); ++i) {
-        if (match_recursive(pattern, input_line.substr(i)) != -1) {
-            return true;
-        }
-    }
-    return false;
 }
 
-// The core recursive engine. Returns match length or -1 on failure.
-int match_recursive(const string& pattern, const string& text) {
-    if (pattern.empty()) return 0;
-
-    if (pattern[0] == '$' && pattern.length() == 1) {
-        return text.empty() ? 0 : -1;
-    }
-
-    // Handle top-level alternation (pattern like "cat|dog")
-    int depth = 0;
-    for (int i = pattern.length() - 1; i >= 0; --i) {
-        if (pattern[i] == ')') depth++;
-        else if (pattern[i] == '(') depth--;
-        else if (pattern[i] == '|' && depth == 0) {
-            string left = pattern.substr(0, i);
-            string right = pattern.substr(i + 1);
-            int len = match_recursive(left, text);
-            if (len != -1) return len;
-            return match_recursive(right, text);
-        }
-    }
-
-    if (pattern[0] == '(') {
-        int level = 0;
-        size_t end_paren_pos = string::npos;
-        for (size_t i = 1; i < pattern.length(); ++i) {
-            if (pattern[i] == '(') level++;
-            else if (pattern[i] == ')') {
-                if (level-- == 0) {
-                    end_paren_pos = i;
-                    break;
+// Main function to print the parsed regex structure for debugging
+void printDebug(const std::vector<Re>& reList) {
+    for (const auto& tmp : reList) {
+        switch (tmp.type) {
+            case DIGIT:
+                std::cout << "DIGIT";
+                break;
+            case ALPHANUM:
+                std::cout << "ALPHANUM";
+                break;
+            case SINGLE_CHAR:
+                std::cout << "SINGLE CHAR" << " >> " << tmp.ccl;
+                break;
+            case ALT:
+                std::cout << "ALT" << " >> " << std::endl;
+                std::cout << "(" << std::endl;
+                for (size_t i = 0; i < tmp.alternatives.size(); ++i) {
+                    printDebug(tmp.alternatives[i]);
+                    if (i < tmp.alternatives.size() - 1)
+                        std::cout << "|" << std::endl;
                 }
-            }
+                std::cout << ")";
+                break;
+            case LIST:
+                std::cout << (tmp.isNegative ? "NEGATIVE " : "") << "LIST" << " >> " << tmp.ccl;
+                break;
+            case START:
+                std::cout << "START";
+                break;
+            case END:
+                std::cout << "END";
+                break;
+            case ETK:
+                 std::cout << "ETK";
+                 break;
+            default:
+                std::cout << "UNKNOWN";
+                break;
         }
+        printQuantifier(tmp);
+        std::cout << std::endl;
+    }
+}
+#endif
 
-        if (end_paren_pos != string::npos) {
-            string group_content = pattern.substr(1, end_paren_pos - 1);
-            string after_group = pattern.substr(end_paren_pos + 1);
-            char quantifier = after_group.empty() ? 0 : after_group[0];
+// The main matching function that uses your RegParser class
+bool match_pattern(const std::string& input_line, const std::string& pattern) {
+    RegParser rp(pattern);
 
-            // =================================================================
-            // START OF CHANGE: Corrected logic for quantified groups
-            // =================================================================
-            if (quantifier == '+') {
-                // `(A)+B` is equivalent to `A` followed by `A*B`.
-                // First, match `A` once (mandatory).
-                int len1 = match_recursive(group_content, text);
-                if (len1 == -1) return -1;
+    // 1. Parse the pattern into an internal representation (AST)
+    if (rp.parse()) {
+#ifdef DEBUG
+        std::cerr << "--- Parsed Regex Structure ---" << std::endl;
+        printDebug(rp.regex);
+        std::cerr << "----------------------------" << std::endl;
+#endif
+        const char* c = input_line.c_str();
+        bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
 
-                string remaining_text = text.substr(len1);
-                string rest_of_pattern = after_group.substr(1); // This is B
-                string star_pattern = group_content; // This is A
-
-                // Now, match `A*B`. This is a choice.
-                // Path A (Greedy): Match `A` again, then `A*B` recursively.
-                int more_len = match_recursive(star_pattern, remaining_text);
-                if (more_len != -1) {
-                    int final_len = match_recursive(pattern, remaining_text); // Match original (A)+B on rest
-                     if (final_len != -1) return len1 + final_len;
+        // 2. Perform the match based on the parsed structure
+        if (hasStartAnchor) {
+            // If anchored, attempt to match only from the beginning of the string.
+            // We start matching from the token *after* the START anchor.
+            return RegParser::match_from_position(&c, rp.regex, 1);
+        } else {
+            // If not anchored, loop through the input string, trying to match from each position.
+            while (*c != '\0') {
+                const char* temp_c = c; // Use a temporary pointer for each attempt
+                if (RegParser::match_from_position(&temp_c, rp.regex, 0)) {
+                    return true; // Match found
                 }
-                
-                // Path B (Backtrack): Match `B`.
-                int rest_len = match_recursive(rest_of_pattern, remaining_text);
-                if (rest_len != -1) return len1 + rest_len;
-
-                return -1;
+                c++; // Move to the next character to try again
+            }
+             // Also check if the pattern can match an empty string at the end
+            const char* end_of_string = c;
+            if (RegParser::match_from_position(&end_of_string, rp.regex, 0)) {
+                return true;
             }
 
-            if (quantifier == '?') {
-                string rest = after_group.substr(1);
-                // Path A (skip group): Try matching the rest of the pattern.
-                int len = match_recursive(rest, text);
-                if (len != -1) return len;
-
-                // Path B (match group): Match the group, then the rest.
-                int group_len = match_recursive(group_content, text);
-                if (group_len != -1) {
-                    int rest_len = match_recursive(rest, text.substr(group_len));
-                    if (rest_len != -1) return group_len + rest_len;
-                }
-                return -1;
-            }
-            // =================================================================
-            // END OF CHANGE
-            // =================================================================
-            return match_recursive(group_content + after_group, text);
+            return false; // No match found after trying all positions
         }
+    } else {
+        // If parsing fails, the pattern is invalid.
+        throw std::runtime_error("Invalid pattern: " + pattern);
     }
-
-    if (pattern.length() > 1 && (pattern[1] == '?' || pattern[1] == '+')) {
-        string rest = pattern.substr(2);
-        if (pattern[1] == '?') {
-            int len = match_recursive(rest, text);
-            if (len != -1) return len;
-        }
-        if (!text.empty() && (pattern[0] == '.' || pattern[0] == text[0])) {
-            if (pattern[1] == '+') {
-                int more_len = match_recursive(pattern, text.substr(1));
-                if (more_len != -1) return 1 + more_len;
-            }
-            int rest_len = match_recursive(rest, text.substr(1));
-            if (rest_len != -1) return 1 + rest_len;
-        }
-        return -1;
-    }
-    
-    if (text.empty()) return -1;
-
-    if (pattern[0] == '[') {
-        size_t end_bracket = pattern.find(']', 1);
-        if (end_bracket != string::npos) {
-            bool is_negated = pattern[1] == '^';
-            string group = pattern.substr(is_negated ? 2 : 1, end_bracket - (is_negated ? 2 : 1));
-            bool found = group.find(text[0]) != string::npos;
-            if (is_negated != found) {
-                int len = match_recursive(pattern.substr(end_bracket + 1), text.substr(1));
-                if (len != -1) return 1 + len;
-            }
-        }
-        return -1;
-    }
-
-    if (pattern[0] == '\\' && pattern.length() > 1) {
-        if ((pattern[1] == 'd' && isdigit(text[0])) || (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'))) {
-            int len = match_recursive(pattern.substr(2), text.substr(1));
-            if (len != -1) return 1 + len;
-        }
-        return -1;
-    }
-
-    if (pattern[0] == '.' || pattern[0] == text[0]) {
-        int len = match_recursive(pattern.substr(1), text.substr(1));
-        if (len != -1) return 1 + len;
-    }
-
-    return -1;
 }
 
 int main(int argc, char* argv[]) {
-    cout << unitbuf;
-    cerr << unitbuf;
+    // Flush after every std::cout / std::cerr to ensure output is not buffered
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+
+    std::cerr << "Logs from your program will appear here" << std::endl;
+
     if (argc != 3) {
-        cerr << "Expected two arguments" << endl;
+        std::cerr << "Usage: " << argv[0] << " -E \"<pattern>\"" << std::endl;
         return 1;
     }
-    string flag = argv[1];
-    string pattern = argv[2];
+
+    std::string flag = argv[1];
+    std::string pattern = argv[2];
+
     if (flag != "-E") {
-        cerr << "Expected first argument to be '-E'" << endl;
+        std::cerr << "Expected first argument to be '-E'" << std::endl;
         return 1;
     }
-    string input_line;
-    getline(cin, input_line);
-    if (match_pattern(input_line, pattern)) {
-        return 0;
-    } else {
-        return 1;
+
+    std::string input_line;
+    std::getline(std::cin, input_line);
+
+    try {
+        if (match_pattern(input_line, pattern)) {
+            return 0; // Success (match found)
+        } else {
+            return 1; // Failure (no match)
+        }
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1; // Failure (error)
     }
 }
