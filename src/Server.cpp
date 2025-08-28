@@ -86,7 +86,7 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
     string group_content = pattern.substr(1, atom_len - 2);
     int current_capture_index = ++group_count;
 
-    // Greedy: try to match as much as possible for the group
+    // Match group content greedily
     for (int end = (int)text.size(); end >= 0; --end) {
         string candidate = text.substr(0, end);
         int group_len = match_recursive(group_content, candidate, group_count);
