@@ -2,157 +2,176 @@
 #include <string>
 #include <stdexcept>
 #include <cctype>
+#include <vector>
 
 using namespace std;
 
-// Forward declaration for the recursive helper function
-bool match_here(const string& pattern, size_t pattern_idx, const string& text, size_t text_idx);
+// Forward declaration for the main recursive function
+int match_recursive(const string& pattern, const string& text);
 
 // The main entry point for the regex engine.
 bool match_pattern(const string& input_line, const string& pattern) {
     if (pattern.empty()) return true;
 
-    // Handle start anchor. If present, we only try to match from the beginning.
     if (pattern[0] == '^') {
-        return match_here(pattern, 1, input_line, 0);
+        // For an anchored pattern, we must match the entire line.
+        return match_recursive(pattern.substr(1), input_line) == (int)input_line.length();
     }
 
-    // For unanchored patterns, we loop and try to match at every possible start position.
-    for (size_t i = 0; i <= input_line.size(); i++) {
-        if (match_here(pattern, 0, input_line, i)) {
+    // For unanchored patterns, loop and try to match at every position.
+    for (size_t i = 0; i <= input_line.length(); ++i) {
+        if (match_recursive(pattern, input_line.substr(i)) != -1) {
             return true;
         }
     }
     return false;
 }
 
-// The core recursive engine. This function definition was likely missing from your file.
-bool match_here(const string& pattern, size_t pattern_idx, const string& text, size_t text_idx) {
-    // Base Case: If we've successfully consumed the entire pattern, we have a match.
-    if (pattern_idx == pattern.size()) {
-        return true;
+// The core recursive engine. Returns match length or -1 on failure.
+int match_recursive(const string& pattern, const string& text) {
+    // Base Case: An empty pattern matches 0 characters of the text.
+    if (pattern.empty()) return 0;
+
+    // Handle '$' anchor
+    if (pattern[0] == '$' && pattern.length() == 1) {
+        return text.empty() ? 0 : -1;
     }
 
-    // Handle '$' anchor: it only matches if we are at the end of the text.
-    if (pattern[pattern_idx] == '$' && pattern_idx == pattern.size() - 1) {
-        return text_idx == text.size();
-    }
-
-    // Handle grouping `()` with alternation `|`. This must be checked before single-char quantifiers.
-    if (pattern[pattern_idx] == '(') {
-        size_t pipe_pos = string::npos;
+    // Handle groups `()` with alternation `|` and quantifiers
+    if (pattern[0] == '(') {
+        int level = 0;
         size_t end_paren_pos = string::npos;
-        int paren_level = 0;
-        // Find the matching ')' and the top-level '|' for this group
-        for (size_t i = pattern_idx + 1; i < pattern.size(); i++) {
-            if (pattern[i] == '(') paren_level++;
+        for (size_t i = 1; i < pattern.length(); ++i) {
+            if (pattern[i] == '(') level++;
             else if (pattern[i] == ')') {
-                if (paren_level-- == 0) {
+                if (level-- == 0) {
                     end_paren_pos = i;
                     break;
                 }
-            } else if (pattern[i] == '|' && paren_level == 0) {
-                pipe_pos = i;
             }
         }
 
         if (end_paren_pos != string::npos) {
+            string group_pattern = pattern.substr(0, end_paren_pos + 1);
             string after_group = pattern.substr(end_paren_pos + 1);
-
-            // Handle alternation (A|B)
-            if (pipe_pos != string::npos && pipe_pos < end_paren_pos) {
-                string alt_A = pattern.substr(pattern_idx + 1, pipe_pos - (pattern_idx + 1));
-                string alt_B = pattern.substr(pipe_pos + 1, end_paren_pos - (pipe_pos + 1));
-                // Try (A followed by the rest) OR (B followed by the rest)
-                return match_here(alt_A + after_group, 0, text, text_idx) ||
-                       match_here(alt_B + after_group, 0, text, text_idx);
-            } else {
-                // It's a simple group (A), so we effectively remove the parentheses
-                string group_content = pattern.substr(pattern_idx + 1, end_paren_pos - (pattern_idx + 1));
-                return match_here(group_content + after_group, 0, text, text_idx);
+            
+            if (!after_group.empty() && after_group[0] == '+') {
+                int len1 = match_recursive(group_pattern, text);
+                if (len1 == -1) return -1;
+                int len2 = match_recursive(pattern, text.substr(len1));
+                if (len2 != -1) return len1 + len2;
+                return len1;
             }
+             if (!after_group.empty() && after_group[0] == '?') {
+                int len = match_recursive(after_group.substr(1), text);
+                if (len != -1) return len;
+                int len1 = match_recursive(group_pattern, text);
+                if(len1 != -1) {
+                    int len2 = match_recursive(after_group.substr(1), text.substr(len1));
+                    if(len2 != -1) return len1 + len2;
+                }
+                return -1;
+            }
+
+            string group_content = pattern.substr(1, end_paren_pos - 1);
+            int len = match_recursive(group_content + after_group, text);
+            if (len != -1) return len;
         }
     }
 
-    // This logic handles a single character/unit followed by a quantifier
-    if (pattern_idx + 1 < pattern.size()) {
-        char quantifier = pattern[pattern_idx + 1];
-        if (quantifier == '?') {
-            return (text_idx < text.size() && (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx]) && match_here(pattern, pattern_idx + 2, text, text_idx + 1)) ||
-                   match_here(pattern, pattern_idx + 2, text, text_idx);
-        }
-        if (quantifier == '+') {
-            if (text_idx < text.size() && (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx])) {
-                // Match one, then it's a choice: match more of this char OR match the rest of the pattern
-                return match_here(pattern, pattern_idx, text, text_idx + 1) ||
-                       match_here(pattern, pattern_idx + 2, text, text_idx + 1);
-            }
-            return false;
+
+    // Handle top-level alternation (pattern like "cat|dog")
+    int depth = 0;
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        if (pattern[i] == '(') depth++;
+        else if (pattern[i] == ')') depth--;
+        else if (pattern[i] == '|' && depth == 0) {
+            string left = pattern.substr(0, i);
+            string right = pattern.substr(i + 1);
+            int left_len = match_recursive(left, text);
+            if (left_len != -1) return left_len;
+            return match_recursive(right, text);
         }
     }
+
+
+    // Handle quantifiers for single characters/atoms
+    if (pattern.length() > 1) {
+        if (pattern[1] == '?') {
+            int len = match_recursive(pattern.substr(2), text);
+            if (len != -1) return len;
+            if (!text.empty() && (pattern[0] == '.' || pattern[0] == text[0])) {
+                len = match_recursive(pattern.substr(2), text.substr(1));
+                if (len != -1) return 1 + len;
+            }
+            return -1;
+        }
+        if (pattern[1] == '+') {
+            if (!text.empty() && (pattern[0] == '.' || pattern[0] == text[0])) {
+                int len = match_recursive(pattern, text.substr(1));
+                if (len != -1) return 1 + len;
+                len = match_recursive(pattern.substr(2), text.substr(1));
+                if (len != -1) return 1 + len;
+            }
+            return -1;
+        }
+    }
+
+    if (text.empty()) return -1;
 
     // Handle single character "atoms" like [...], \d, \w, and literals
-    if (pattern[pattern_idx] == '[') {
-        size_t end_bracket = pattern.find(']', pattern_idx);
-        if (end_bracket != string::npos && text_idx < text.size()) {
-            bool is_negated = pattern[pattern_idx + 1] == '^';
-            size_t start = pattern_idx + (is_negated ? 2 : 1);
+    if (pattern[0] == '[') {
+        size_t end_bracket = pattern.find(']', 1);
+        if (end_bracket != string::npos) {
+            bool is_negated = pattern[1] == '^';
+            size_t start = is_negated ? 2 : 1;
             string group = pattern.substr(start, end_bracket - start);
-            bool found = group.find(text[text_idx]) != string::npos;
+            bool found = group.find(text[0]) != string::npos;
             if (is_negated != found) {
-                return match_here(pattern, end_bracket + 1, text, text_idx + 1);
+                int len = match_recursive(pattern.substr(end_bracket + 1), text.substr(1));
+                if (len != -1) return 1 + len;
             }
         }
-        return false;
+        return -1;
     }
 
-    if (pattern[pattern_idx] == '\\' && pattern_idx + 1 < pattern.size()) {
-        if (text_idx < text.size()) {
-            char meta = pattern[pattern_idx + 1];
-            if ((meta == 'd' && isdigit(text[text_idx])) ||
-                (meta == 'w' && (isalnum(text[text_idx]) || text[text_idx] == '_'))) {
-                return match_here(pattern, pattern_idx + 2, text, text_idx + 1);
-            }
+    if (pattern[0] == '\\' && pattern.length() > 1) {
+        bool matches = (pattern[1] == 'd' && isdigit(text[0])) ||
+                       (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'));
+        if (matches) {
+            int len = match_recursive(pattern.substr(2), text.substr(1));
+            if (len != -1) return 1 + len;
         }
-        return false;
+        return -1;
     }
 
-    // Default: literal character or '.'
-    if (text_idx < text.size() && (pattern[pattern_idx] == '.' || pattern[pattern_idx] == text[text_idx])) {
-        return match_here(pattern, pattern_idx + 1, text, text_idx + 1);
+    if (pattern[0] == '.' || pattern[0] == text[0]) {
+        int len = match_recursive(pattern.substr(1), text.substr(1));
+        if (len != -1) return 1 + len;
     }
 
-    return false;
+    return -1;
 }
 
+// The main function remains unchanged, but now uses the new match_pattern
 int main(int argc, char* argv[]) {
     cout << unitbuf;
     cerr << unitbuf;
-
     if (argc != 3) {
         cerr << "Expected two arguments" << endl;
         return 1;
     }
-
     string flag = argv[1];
     string pattern = argv[2];
-
     if (flag != "-E") {
         cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
-
     string input_line;
     getline(cin, input_line);
-
-    try {
-        if (match_pattern(input_line, pattern)) {
-            return 0;
-        } else {
-            return 1;
-        }
-    } catch (const runtime_error& e) {
-        cerr << e.what() << endl;
+    if (match_pattern(input_line, pattern)) {
+        return 0;
+    } else {
         return 1;
     }
 }
