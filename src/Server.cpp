@@ -74,25 +74,26 @@ int match_recursive(const string& pattern, const string& text) {
             // START OF CHANGE: Corrected logic for quantified groups
             // =================================================================
             if (quantifier == '+') {
+                // Must match the group content at least once.
                 int len1 = match_recursive(group_content, text);
-                if (len1 == -1) return -1; // Must match at least once
+                if (len1 == -1) return -1;
                 
-                string text_after_one = text.substr(len1);
-                string pattern_after_plus = after_group_pattern.substr(1);
+                string text_after_one_match = text.substr(len1);
+                string pattern_after_quantifier = after_group_pattern.substr(1);
 
                 // Path A: The '+' is done. Try to match the rest of the pattern.
-                int rest_len = match_recursive(pattern_after_plus, text_after_one);
+                int rest_len = match_recursive(pattern_after_quantifier, text_after_one_match);
                 if (rest_len != -1) return len1 + rest_len;
 
-                // Path B: The '+' continues. Match the quantified group again on remaining text.
-                int more_len = match_recursive(pattern.substr(0, end_paren_pos + 2), text_after_one);
+                // Path B: The '+' continues. Match the quantified group `(...)+` again.
+                int more_len = match_recursive(pattern.substr(0, end_paren_pos + 2), text_after_one_match);
                 if (more_len != -1) return len1 + more_len;
                 
                 return -1;
             }
 
             if (quantifier == '?') {
-                // Path A: Skip the group and match the rest.
+                // Path A: Skip the group and match the rest of the pattern.
                 int len_skipped = match_recursive(after_group_pattern.substr(1), text);
                 if (len_skipped != -1) return len_skipped;
 
