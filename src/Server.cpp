@@ -1,585 +1,248 @@
+#include <algorithm>
+#include <cassert>
+#include <functional>
 #include <iostream>
+#include <ranges>
+#include <span>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
-#include <cctype>
-#include <stdexcept>
-#include <fstream>
-#include <algorithm> // For std::copy
-#include <cstring>   // For strlen and strcpy
+int captured_group_count = 0;
+std::unordered_map<int, std::string_view> captured_group_match;
 
-using namespace std;
+std::size_t match_single_char(std::string_view input_line, char pattern) {
+    return static_cast<std::size_t>(input_line[0] == pattern);
+}
+std::size_t match_digit(std::string_view input_line) {
+    return static_cast<std::size_t>(std::ranges::find_if(input_line, isdigit) == input_line.begin());
+}
+std::size_t match_alphanum(std::string_view input_line) {
+    return static_cast<std::size_t>(std::ranges::find_if(input_line, isalnum) == input_line.begin());
+}
 
-// --- Start of RegParser.h content ---
+std::size_t match_group(std::string_view input_line, std::string_view pattern) {
+    if (pattern[0] == '^') return static_cast<std::size_t>(input_line.find_first_not_of(pattern.substr(1)) == 0);
+    return static_cast<std::size_t>(input_line.find_first_of(pattern) == 0);
+}
 
-typedef enum
-{
-    NONE,
-    PLUS,
-    STAR,
-    MARK
-} Quantifier;
+std::size_t match_backreference(std::string_view input_line, int group_id) {
+    if (!captured_group_match.contains(group_id)) return 0;
+    if (input_line.starts_with(captured_group_match[group_id])) return captured_group_match[group_id].size();
+    return 0;
+}
 
-typedef enum
-{
-    SINGLE_CHAR,
-    DIGIT,
-    ALPHANUM,
-    START,
-    END,
-    LIST,
-    ALT,
-    ETK, // Error Token
-} RegType;
+enum class TokenType { character, digit, alphnum, wildcard, backreference, group, parenthesis, pattern };
+std::string_view type_to_str(TokenType type) {
+    switch (type) {
+        case TokenType::character:
+            return "character";
+        case TokenType::digit:
+            return "digit";
+        case TokenType::alphnum:
+            return "alphnum";
+        case TokenType::wildcard:
+            return "wildcard";
+        case TokenType::backreference:
+            return "backreference";
+        case TokenType::group:
+            return "group";
+        case TokenType::parenthesis:
+            return "parenthesis";
+        case TokenType::pattern:
+            return "pattern";
+    }
+    std::unreachable();
+}
 
-struct Re; // Forward declaration for recursive struct
-struct Re
-{
-    RegType type;
-    char* ccl; // Character class list or single char
-    bool isNegative;
-    Quantifier quantifier;
-    std::vector<std::vector<Re>> alternatives;
+class Token {
+   private:
+    const TokenType m_type;
+    const std::string_view m_pattern;
+    int captured_group_idx{0};
+    std::vector<Token> subtokens{};
+    bool one_or_more{false};
+    bool zero_or_one{false};
 
-    // Destructor to free allocated memory
-    ~Re() {
-        delete[] ccl;
+   public:
+    Token(const TokenType type, const std::string_view pattern, int captured_group_idx = 0)
+        : m_type{type}, m_pattern{pattern}, captured_group_idx{captured_group_idx} {
+        if (type == TokenType::parenthesis) {
+            using namespace std::literals;
+            for (const auto word : std::views::split(pattern, "|"sv)) {
+                std::cout << "hello " << std::string_view(word) << std::endl;
+                subtokens.push_back(Token(TokenType::pattern, std::string_view(word)));
+            }
+        }
+        if (type == TokenType::pattern) {
+            std::string_view local_pattern{pattern};
+            while (local_pattern.size()) {
+                if (local_pattern.starts_with("\\d")) {
+                    subtokens.push_back(Token(TokenType::digit, "\\d"));
+                    local_pattern = local_pattern.substr(2);
+                } else if (local_pattern.starts_with("\\w")) {
+                    subtokens.push_back(Token(TokenType::alphnum, "\\w"));
+                    local_pattern = local_pattern.substr(2);
+                } else if (local_pattern.starts_with(".")) {
+                    subtokens.push_back(Token(TokenType::wildcard, "."));
+                    local_pattern = local_pattern.substr(1);
+                } else if (local_pattern.starts_with("[")) {
+                    const auto end = local_pattern.find("]");
+                    subtokens.push_back(Token(TokenType::group, local_pattern.substr(1, end - 1)));
+                    local_pattern = local_pattern.substr(end + 1);
+                } else if (local_pattern.starts_with("(")) {
+                    const auto end = local_pattern.find(")");
+                    subtokens.push_back(
+                        Token(TokenType::parenthesis, local_pattern.substr(1, end - 1), ++captured_group_count));
+                    local_pattern = local_pattern.substr(end + 1);
+                } else if (local_pattern.starts_with("\\") && isdigit(local_pattern[1])) {
+                    subtokens.push_back(
+                        Token(TokenType::backreference, local_pattern.substr(0, 2), local_pattern[1] - '0'));
+                    local_pattern = local_pattern.substr(2);
+                } else if (local_pattern.starts_with("?")) {
+                    assert(subtokens.size());
+                    subtokens.back().set_zero_or_one(true);
+                    local_pattern = local_pattern.substr(1);
+                } else if (local_pattern.starts_with("+")) {
+                    assert(subtokens.size());
+                    subtokens.back().set_one_or_more(true);
+                    local_pattern = local_pattern.substr(1);
+                } else {
+                    subtokens.push_back(Token(TokenType::character, local_pattern.substr(0, 1)));
+                    local_pattern = local_pattern.substr(1);
+                }
+            }
+        }
     }
 
-    // Default constructor
-    Re() : type(ETK), ccl(nullptr), isNegative(false), quantifier(NONE) {}
-
-    // Copy constructor
-    Re(const Re& other) {
-        type = other.type;
-        isNegative = other.isNegative;
-        quantifier = other.quantifier;
-        alternatives = other.alternatives;
-        if (other.ccl) {
-            ccl = new char[strlen(other.ccl) + 1];
-            strcpy(ccl, other.ccl);
-        } else {
-            ccl = nullptr;
-        }
+    TokenType type() const {
+        return m_type;
     }
 
-    // Copy assignment operator
-    Re& operator=(const Re& other) {
-        if (this == &other) {
-            return *this;
+    std::string_view pattern() const {
+        return m_pattern;
+    }
+
+    void set_one_or_more(bool x) {
+        one_or_more = x;
+    }
+    void set_zero_or_one(bool x) {
+        zero_or_one = x;
+    }
+
+    std::vector<std::size_t> match_sizes(std::string_view input) const {
+        std::vector<std::size_t> res;
+        if (zero_or_one) res.push_back(0);
+        if (m_type == TokenType::pattern) {
+            std::vector<std::size_t> current_match_sizes{0};
+            for (const auto& tok : subtokens) {
+                std::vector<std::size_t> next_match_sizes{};
+                for (auto dim : current_match_sizes) {
+                    auto add = tok.match_sizes(input.substr(dim));
+                    for (auto& x : add) x += dim;
+                    next_match_sizes.insert(next_match_sizes.end(), add.begin(), add.end());
+                }
+                current_match_sizes = std::move(next_match_sizes);
+            }
+            return current_match_sizes;
         }
-        delete[] ccl;
-        type = other.type;
-        isNegative = other.isNegative;
-        quantifier = other.quantifier;
-        alternatives = other.alternatives;
-        if (other.ccl) {
-            ccl = new char[strlen(other.ccl) + 1];
-            strcpy(ccl, other.ccl);
-        } else {
-            ccl = nullptr;
+        if (m_type == TokenType::parenthesis) {
+            std::vector<std::size_t> current_match_sizes{};
+            for (const auto& tok : subtokens) {
+                const auto add = tok.match_sizes(input);
+                current_match_sizes.insert(current_match_sizes.end(), add.begin(), add.end());
+            }
+            std::ranges::sort(current_match_sizes);
+            current_match_sizes.resize(std::unique(current_match_sizes.begin(), current_match_sizes.end()) -
+                                       current_match_sizes.begin());
+
+            if (!current_match_sizes.empty()) {
+                captured_group_match[captured_group_idx] = input.substr(0, current_match_sizes.back());
+            }
+            return current_match_sizes;
         }
-        return *this;
+
+        std::size_t current_match_size{0};
+        while (input.size()) {
+            std::size_t len{0};
+            switch (m_type) {
+                case TokenType::character:
+                    len = match_single_char(input, m_pattern[0]);
+                    break;
+                case TokenType::digit:
+                    len = match_digit(input);
+                    break;
+                case TokenType::alphnum:
+                    len = match_alphanum(input);
+                    break;
+                case TokenType::wildcard:
+                    len = 1;
+                    break;
+                case TokenType::backreference:
+                    len = match_backreference(input, captured_group_idx);
+                    break;
+                case TokenType::group:
+                    len = match_group(input, m_pattern);
+                    break;
+            }
+            if (len) {
+                current_match_size += len;
+                res.push_back(current_match_size);
+                input = input.substr(len);
+            } else {
+                break;
+            }
+            if (!one_or_more) break;
+        }
+        if (input.empty() && m_pattern == "$") {
+            res.push_back(current_match_size);
+        }
+        return res;
+    }
+    friend std::ostream& operator<<(std::ostream& o, const Token& t) {
+        o << type_to_str(t.m_type) << " :{";
+        for (auto x : t.subtokens) {
+            o << x << ",";
+        }
+        o << "}";
+        return o;
     }
 };
 
-class RegParser
-{
-public:
-    RegParser(const std::string& pattern)
-    {
-        _pattern_str = pattern;
-        _pattern = _pattern_str.c_str();
-        _begin = _pattern;
-        _end = _begin + _pattern_str.size();
-    };
-
-    bool parse();
-    Re makeRe(RegType type, char* ccl = nullptr, bool isNegative = false);
-
-    static bool match_current(const char* c, const std::vector<Re>& regex, int idx);
-    static bool match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx);
-    static bool match_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
-    
-    std::vector<Re> regex;
-
-private:
-    std::string _pattern_str;
-    const char* _pattern{nullptr};
-    const char* _begin{nullptr};
-    const char* _end{nullptr};
-
-    bool isEof();
-    bool consume();
-    bool check(char c);
-    bool match(char c);
-
-    Re parseElement();
-    Re parseCharacterClass();
-    Re parseGroup();
-    void applyQuantifiers(Re& element);
-};
-
-// --- End of RegParser.h content ---
-// --- Start of RegParser.cpp content ---
-
-bool RegParser::parse()
-{
-    while (!isEof())
-    {
-        Re element = parseElement();
-        if (element.type == ETK)
-            return false;
-        regex.push_back(element);
+bool match_pattern_start(std::string_view input_line, std::span<Token> tokens) {
+    if (tokens.empty()) return true;
+    if (input_line.empty()) return tokens.size() == 1 && tokens[0].pattern() == "$";
+    std::vector<std::size_t> match_sizes{tokens[0].match_sizes(input_line)};
+    for (const auto dim : match_sizes) {
+        if (match_pattern_start(input_line.substr(dim), tokens.subspan(1))) return true;
     }
-    return true;
+    return false;
 }
-
-Re RegParser::makeRe(RegType type, char* ccl, bool isNegative)
-{
-    Re current;
-    current.type = type;
-    current.ccl = ccl;
-    current.isNegative = isNegative;
-    current.quantifier = NONE;
-    return current;
-}
-
-bool RegParser::match_current(const char* c, const std::vector<Re>& regex, int idx)
-{
-    if (*c == '\0') {
-        return regex[idx].type == END;
-    }
-
-    const Re* current = &regex[idx];
-    switch (current->type)
-    {
-    case DIGIT:
-        return isdigit(*c);
-    case ALPHANUM:
-        return isalnum(*c) || *c == '_';
-    case SINGLE_CHAR:
-        return *c == *current->ccl || *current->ccl == '.';
-    case LIST:
-    {
-        const char* p = current->ccl;
-        bool found = false;
-        while (*p != '\0')
-        {
-            if (*c == *p)
-            {
-                found = true;
-                break;
-            }
-            ++p;
-        }
-        return current->isNegative ? !found : found;
-    }
-    case START:
-        return true;
-    case END:
-        return *c == '\0';
-    default:
-        return false;
-    }
-}
-
-bool RegParser::match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx)
-{
-    const char* c = *start_pos;
-    int rIdx = idx;
-    int pattern_length = regex.size();
-
-    while (rIdx < pattern_length)
-    {
-        const Re& current = regex[rIdx];
-        
-        if (current.quantifier == PLUS) {
-            const char* temp_c = c;
-            if (current.type == ALT) {
-                if(match_alt_one_or_more(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            } else {
-                if(match_one_or_more(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            }
-            return false;
-        }
-        
-        if (current.quantifier == MARK) {
-            const char* temp_c = c;
-            if (current.type == ALT) {
-                if(match_alt_zero_or_one(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            } else {
-                if(match_zero_or_one(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        if (current.type == ALT) {
-            for (const auto& alt : current.alternatives) {
-                const char* temp_c = c;
-                if (match_from_position(&temp_c, alt, 0)) {
-                    if (match_from_position(&temp_c, regex, rIdx + 1)) {
-                        *start_pos = temp_c;
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        if (!match_current(c, regex, rIdx)) {
-            return false;
-        }
-
-        if (current.type != START) {
-            c++;
-        }
-        rIdx++;
-    }
-
-    *start_pos = c;
-    return true;
-}
-
-bool RegParser::match_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const char* t = *c;
-    if (!match_current(t, regex, idx))
-        return false;
-    t++;
-
-    while (*t != '\0' && match_current(t, regex, idx))
-    {
-        t++;
-    }
-
-    while (t >= *c)
-    {
-        const char* test_pos = t;
-        if (match_from_position(&test_pos, regex, idx + 1))
-        {
-            *c = test_pos;
-            return true;
-        }
-        if (t == *c) break;
-        t--;
+bool match_pattern(std::string_view input_line, std::string_view pattern) {
+    bool line_start = pattern[0] == '^';
+    if (line_start) pattern = pattern.substr(1);
+    Token parser(TokenType::pattern, pattern);
+    std::cout << parser << std::endl;
+    if (line_start) return !parser.match_sizes(input_line).empty();
+    for (int i = 0; i < input_line.size(); i++) {
+        if (!parser.match_sizes(input_line.substr(i)).empty()) return true;
     }
     return false;
 }
 
-bool RegParser::match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const Re& altGp = regex[idx];
-    const char* original_pos = *c;
-
-    // Must match at least once
-    bool matched_once = false;
-    const char* first_match_end = original_pos;
-    for(const auto& alt : altGp.alternatives) {
-        const char* temp_pos = original_pos;
-        if(match_from_position(&temp_pos, alt, 0) && temp_pos > original_pos) {
-            first_match_end = temp_pos;
-            matched_once = true;
-            break;
-        }
-    }
-    if (!matched_once) return false;
-
-    const char* pos = first_match_end;
-    while(true) {
-        const char* current_match_end = pos;
-        bool found_match = false;
-        for (const auto& alt : altGp.alternatives) {
-            const char* temp_pos = pos;
-            if (match_from_position(&temp_pos, alt, 0) && temp_pos > pos) {
-                current_match_end = temp_pos;
-                found_match = true;
-                break;
-            }
-        }
-
-        if (!found_match) break;
-        pos = current_match_end;
-    }
-
-    while (pos >= first_match_end) {
-        const char* temp_pos = pos;
-        if (match_from_position(&temp_pos, regex, idx + 1)) {
-            *c = temp_pos;
-            return true;
-        }
-        if (pos == first_match_end) break;
-        pos--;
-    }
-     // Check if matching just once is enough
-    const char* temp_pos_once = first_match_end;
-    if (match_from_position(&temp_pos_once, regex, idx + 1)) {
-        *c = temp_pos_once;
-        return true;
-    }
-    
-    return false;
-}
-
-bool RegParser::match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const char* temp_pos = *c;
-    if (match_current(temp_pos, regex, idx))
-    {
-        temp_pos++;
-        if (match_from_position(&temp_pos, regex, idx + 1))
-        {
-            *c = temp_pos;
-            return true;
-        }
-    }
-    return match_from_position(c, regex, idx + 1);
-}
-
-bool RegParser::match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
-{
-    // Path 1: Match the group
-    const Re& altGp = regex[idx];
-    for (const auto& alt : altGp.alternatives)
-    {
-        const char* t = *c;
-        if (match_from_position(&t, alt, 0))
-        {
-            if (match_from_position(&t, regex, idx + 1))
-            {
-                *c = t;
-                return true;
-            }
-        }
-    }
-    // Path 2: Skip the group
-    return match_from_position(c, regex, idx + 1);
-}
-
-bool RegParser::isEof()
-{
-    return _pattern >= _end;
-}
-
-bool RegParser::consume()
-{
-    if (!isEof())
-    {
-        _pattern++;
-        return true;
-    }
-    return false;
-}
-
-bool RegParser::check(char c)
-{
-    return !isEof() && *_pattern == c;
-}
-
-bool RegParser::match(char c)
-{
-    if (check(c))
-        return consume();
-    return false;
-}
-
-Re RegParser::parseElement()
-{
-    if (check('^')) {
-        consume();
-        return makeRe(START);
-    }
-    if (check('$')) {
-        consume();
-        return makeRe(END);
-    }
-    if (check('\\')) {
-        consume();
-        if (isEof()) return makeRe(ETK);
-        Re current;
-        if (check('d')) {
-            current = makeRe(DIGIT);
-        } else if (check('w')) {
-            current = makeRe(ALPHANUM);
-        } else {
-            char* cstr = new char[2];
-            cstr[0] = *_pattern;
-            cstr[1] = '\0';
-            current = makeRe(SINGLE_CHAR, cstr);
-        }
-        consume();
-        applyQuantifiers(current);
-        return current;
-    }
-    if (check('[')) {
-        consume();
-        return parseCharacterClass();
-    }
-    if (check('(')) {
-        consume();
-        return parseGroup();
-    }
-    if (!isEof()) {
-        char* cstr = new char[2];
-        cstr[0] = *_pattern;
-        cstr[1] = '\0';
-        consume();
-        Re current = makeRe(SINGLE_CHAR, cstr);
-        applyQuantifiers(current);
-        return current;
-    }
-    return makeRe(ETK);
-}
-
-Re RegParser::parseCharacterClass()
-{
-    Re current = makeRe(LIST);
-    std::string buffer;
-
-    current.isNegative = match('^');
-    while (!isEof() && !check(']'))
-    {
-        buffer.push_back(*_pattern);
-        consume();
-    }
-
-    if (!match(']'))
-    {
-        return makeRe(ETK);
-    }
-
-    char* cstr = new char[buffer.size() + 1];
-    std::copy(buffer.begin(), buffer.end(), cstr);
-    cstr[buffer.size()] = '\0';
-    current.ccl = cstr;
-    applyQuantifiers(current);
-    return current;
-}
-
-Re RegParser::parseGroup()
-{
-    Re altGp = makeRe(ALT);
-    std::vector<Re> current_sequence;
-    bool isClosed = false;
-
-    while (!isEof())
-    {
-        if (check('|')) {
-            consume();
-            altGp.alternatives.push_back(current_sequence);
-            current_sequence.clear();
-        } else if (check(')')) {
-            consume();
-            altGp.alternatives.push_back(current_sequence);
-            isClosed = true;
-            break;
-        } else {
-            Re element = parseElement();
-            if (element.type == ETK) return makeRe(ETK);
-            current_sequence.push_back(element);
-        }
-    }
-
-    if (!isClosed) return makeRe(ETK);
-
-    applyQuantifiers(altGp);
-    return altGp;
-}
-
-void RegParser::applyQuantifiers(Re& element)
-{
-    if (!isEof()) {
-        if (check('+')) {
-            element.quantifier = PLUS;
-            consume();
-        } else if (check('?')) {
-            element.quantifier = MARK;
-            consume();
-        }
-    }
-}
-
-// --- End of RegParser.cpp content ---
-// --- Start of Server.cpp content ---
-
-#ifdef DEBUG
-void printDebug(const std::vector<Re>& reList);
-#endif
-
-bool match_pattern(const std::string& input_line, const std::string& pattern)
-{
-    RegParser rp(pattern);
-
-    if (rp.parse())
-    {
-#ifdef DEBUG
-        std::cerr << "--- Parsed Regex Structure ---" << std::endl;
-        printDebug(rp.regex);
-        std::cerr << "----------------------------" << std::endl;
-#endif
-        const char* c = input_line.c_str();
-        bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
-
-        if (hasStartAnchor)
-        {
-            return RegParser::match_from_position(&c, rp.regex, 1);
-        }
-        else
-        {
-            while (*c != '\0')
-            {
-                const char* temp_c = c;
-                if (RegParser::match_from_position(&temp_c, rp.regex, 0))
-                {
-                    return true;
-                }
-                c++;
-            }
-            const char* end_of_string = c;
-            if (RegParser::match_from_position(&end_of_string, rp.regex, 0)) {
-                return true;
-            }
-            return false;
-        }
-    }
-    else
-    {
-        throw std::runtime_error("Invalid pattern: " + pattern);
-    }
-}
-
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
+    // Flush after every std::cout / std::cerr
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
-
-    std::cerr << "Logs from your program will appear here" << std::endl;
-
-    if (argc != 3)
-    {
-        std::cerr << "Usage: " << argv[0] << " -E \"<pattern>\"" << std::endl;
+    if (argc != 3) {
+        std::cerr << "Expected two arguments" << std::endl;
         return 1;
     }
 
     std::string flag = argv[1];
     std::string pattern = argv[2];
 
-    if (flag != "-E")
-    {
+    if (flag != "-E") {
         std::cerr << "Expected first argument to be '-E'" << std::endl;
         return 1;
     }
@@ -587,51 +250,16 @@ int main(int argc, char* argv[])
     std::string input_line;
     std::getline(std::cin, input_line);
 
-    try
-    {
-        if (match_pattern(input_line, pattern))
-        {
+    try {
+        if (match_pattern(input_line, pattern)) {
+            std::cout << "match" << std::endl;
             return 0;
-        }
-        else
-        {
+        } else {
+            std::cout << "no match" << std::endl;
             return 1;
         }
-    }
-    catch (const std::runtime_error& e)
-    {
-        std::cerr << "Error: " << e.what() << std::endl;
+    } catch (const std::runtime_error& e) {
+        std::cerr << e.what() << std::endl;
         return 1;
     }
 }
-
-#ifdef DEBUG
-void printQuantifier(const Re& re);
-
-void printDebug(const std::vector<Re>& reList) {
-    for (const auto& tmp : reList) {
-        switch (tmp.type) {
-            case DIGIT: std::cout << "DIGIT"; break;
-            case ALPHANUM: std::cout << "ALPHANUM"; break;
-            case SINGLE_CHAR: std::cout << "SINGLE CHAR" << " >> " << tmp.ccl; break;
-            case ALT:
-                std::cout << "ALT" << " >> " << std::endl;
-                std::cout << "(" << std::endl;
-                for (size_t i = 0; i < tmp.alternatives.size(); ++i) {
-                    printDebug(tmp.alternatives[i]);
-                    if (i < tmp.alternatives.size() - 1)
-                        std::cout << "|" << std::endl;
-                }
-                std::cout << ")";
-                break;
-            case LIST: std::cout << (tmp.isNegative ? "NEGATIVE " : "") << "LIST" << " >> " << tmp.ccl; break;
-            case START: std::cout << "START"; break;
-            case END: std::cout << "END"; break;
-            case ETK: std::cout << "ETK"; break;
-            default: std::cout << "UNKNOWN"; break;
-        }
-        printQuantifier(tmp);
-        std::cout << std::endl;
-    }
-}
-#endif
