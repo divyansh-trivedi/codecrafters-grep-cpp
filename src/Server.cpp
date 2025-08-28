@@ -67,55 +67,47 @@ int match_recursive(const string& pattern, const string& text) {
             string after_group = pattern.substr(end_paren_pos + 1);
             char quantifier = after_group.empty() ? 0 : after_group[0];
 
-            // =================================================================
-            // START OF CHANGE: Corrected logic for quantified groups
-            // =================================================================
             if (quantifier == '+') {
-                // `(A)+B` is equivalent to `A` followed by `A*B`.
-                // First, match `A` once (mandatory).
+                // Must match the group content at least once.
                 int len1 = match_recursive(group_content, text);
                 if (len1 == -1) return -1;
 
                 string remaining_text = text.substr(len1);
-                string rest_of_pattern = after_group.substr(1); // This is B
-                string star_pattern = group_content; // This is A
-
-                // Now, match `A*B`. This is a choice.
-                // Path A (Greedy): Match `A` again, then `A*B` recursively.
-                int more_len = match_recursive(star_pattern, remaining_text);
-                if (more_len != -1) {
-                    int final_len = match_recursive(pattern, remaining_text); // Match original (A)+B on rest
-                     if (final_len != -1) return len1 + final_len;
-                }
                 
-                // Path B (Backtrack): Match `B`.
-                int rest_len = match_recursive(rest_of_pattern, remaining_text);
-                if (rest_len != -1) return len1 + rest_len;
+                // --- START OF THE CRITICAL FIX ---
+                // Path A (Greedy): Try to match the WHOLE ORIGINAL PATTERN on the rest of the text.
+                // This correctly handles the "more" part of the `+` without infinite recursion.
+                int more_len = match_recursive(pattern, remaining_text);
+                if (more_len != -1) return len1 + more_len;
 
+                // Path B (Backtrack): If the greedy path fails, try matching the rest of the pattern
+                // that comes AFTER the `+`.
+                int rest_len = match_recursive(after_group.substr(1), remaining_text);
+                if (rest_len != -1) return len1 + rest_len;
+                // --- END OF THE CRITICAL FIX ---
+                
                 return -1;
             }
 
             if (quantifier == '?') {
-                string rest = after_group.substr(1);
-                // Path A (skip group): Try matching the rest of the pattern.
-                int len = match_recursive(rest, text);
-                if (len != -1) return len;
+                // Path A: Skip the group and match the rest.
+                int len_skipped = match_recursive(after_group.substr(1), text);
+                if (len_skipped != -1) return len_skipped;
 
-                // Path B (match group): Match the group, then the rest.
-                int group_len = match_recursive(group_content, text);
-                if (group_len != -1) {
-                    int rest_len = match_recursive(rest, text.substr(group_len));
-                    if (rest_len != -1) return group_len + rest_len;
+                // Path B: Match the group once, then match the rest.
+                int len_matched = match_recursive(group_content, text);
+                if (len_matched != -1) {
+                    int rest_len = match_recursive(after_group.substr(1), text.substr(len_matched));
+                    if (rest_len != -1) return len_matched + rest_len;
                 }
                 return -1;
             }
-            // =================================================================
-            // END OF CHANGE
-            // =================================================================
+            // If no quantifier, it's just a group: match its content then the rest.
             return match_recursive(group_content + after_group, text);
         }
     }
 
+    // Handle quantifiers for single characters
     if (pattern.length() > 1 && (pattern[1] == '?' || pattern[1] == '+')) {
         string rest = pattern.substr(2);
         if (pattern[1] == '?') {
@@ -133,6 +125,7 @@ int match_recursive(const string& pattern, const string& text) {
         return -1;
     }
     
+    // Handle single "atom" matches
     if (text.empty()) return -1;
 
     if (pattern[0] == '[') {
