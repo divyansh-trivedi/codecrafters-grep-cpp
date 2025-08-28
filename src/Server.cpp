@@ -14,120 +14,117 @@ int find_closing_paren(const std::string &pattern, int start) {
     return -1; // invalid pattern
 }
 
-// Match a single character in a group
-bool match_group(const std::string &input, const std::string &group) {
-    return input.size() > 0 && group.find(input[0]) != std::string::npos;
+// Split top-level alternation in a group
+std::vector<std::string> split_alternation(const std::string &pattern) {
+    std::vector<std::string> options;
+    int depth = 0;
+    size_t last = 0;
+    for (size_t i = 0; i < pattern.size(); i++) {
+        if (pattern[i] == '(') depth++;
+        else if (pattern[i] == ')') depth--;
+        else if (pattern[i] == '|' && depth == 0) {
+            options.push_back(pattern.substr(last, i - last));
+            last = i + 1;
+        }
+    }
+    options.push_back(pattern.substr(last));
+    return options;
 }
 
-// Try to match pattern and return number of characters consumed
-int match_once(const std::string &input, const std::string &pattern);
-
-// Match pattern zero or more (+ or ?) times
-bool match_quantifier(const std::string &input, const std::string &pattern, char quant, const std::string &rest) {
-    if (quant == '+') {
-        int pos = 0;
-        bool first = true;
-        while (pos <= (int)input.size()) {
-            int consumed = match_once(input.substr(pos), pattern);
-            if (consumed <= 0) break;
-            pos += consumed;
-            first = false;
-            if (match_once(input.substr(pos), rest) == (int)rest.size() || match_once(input.substr(pos), rest) != -1) return true;
-        }
-        return !first && match_once(input.substr(pos), rest) != -1;
-    } else if (quant == '?') {
-        return match_once(input, rest) != -1 || match_once(input, pattern + rest) != -1;
-    }
-    return false;
-}
-
-// Match a single occurrence of a pattern
-int match_once(const std::string &input, const std::string &pattern) {
-    if (pattern.empty()) return 0;
-    if (pattern[0] == '$') return input.empty() ? 0 : -1;
-    if (input.empty()) return -1;
-
-    // Group with alternation
-    if (pattern[0] == '(') {
-        int close_paren = find_closing_paren(pattern, 0);
-        std::string inside = pattern.substr(1, close_paren - 1);
-        std::string remaining = pattern.substr(close_paren + 1);
-        char quant = remaining.empty() ? 0 : remaining[0];
-        if (quant == '+' || quant == '?') remaining = remaining.substr(1);
-
-        // Split top-level alternation
-        std::vector<std::string> options;
-        int depth = 0;
-        size_t last = 0;
-        for (size_t i = 0; i < inside.size(); i++) {
-            if (inside[i] == '(') depth++;
-            else if (inside[i] == ')') depth--;
-            else if (inside[i] == '|' && depth == 0) {
-                options.push_back(inside.substr(last, i - last));
-                last = i + 1;
-            }
-        }
-        options.push_back(inside.substr(last));
-
-        for (auto &opt : options) {
-            if (quant) {
-                if (match_quantifier(input, opt, quant, remaining)) return input.size(); // success
-            } else {
-                int consumed = match_once(input, opt);
-                if (consumed >= 0) return consumed + (int)remaining.size(); // naive, could refine
-            }
-        }
-        return -1;
-    }
-
-    // Quantifiers for single chars
-    if (pattern.size() > 1 && (pattern[1] == '+' || pattern[1] == '?')) {
-        return match_quantifier(input, std::string(1, pattern[0]), pattern[1], pattern.substr(2)) ? (int)input.size() : -1;
-    }
-
-    // Dot
-    if (pattern[0] == '.') return 1;
-
-    // \d
-    if (pattern.size() >= 2 && pattern.substr(0, 2) == "\\d") return isdigit(input[0]) ? 1 : -1;
-
-    // \w
-    if (pattern.size() >= 2 && pattern.substr(0, 2) == "\\w") return isalnum(input[0]) ? 1 : -1;
-
-    // []
+// Match single character or character class
+bool match_char(const char c, const std::string &pattern, size_t &consumed) {
+    if (pattern.empty()) return false;
+    if (pattern[0] == '.') { consumed = 1; return true; }
+    if (pattern.substr(0,2) == "\\d") { consumed = 1; return isdigit(c); }
+    if (pattern.substr(0,2) == "\\w") { consumed = 1; return isalnum(c); }
     if (pattern[0] == '[') {
         auto close = pattern.find(']');
         bool neg = pattern[1] == '^';
         std::string chars = neg ? pattern.substr(2, close - 2) : pattern.substr(1, close - 1);
-        bool match = match_group(input, chars);
-        if ((neg && !match) || (!neg && match)) return 1;
-        return -1;
+        bool match = chars.find(c) != std::string::npos;
+        consumed = close + 1;
+        return (neg && !match) || (!neg && match);
     }
-
-    // Exact char
-    if (pattern[0] == input[0]) return 1;
-
-    return -1;
+    consumed = 1;
+    return pattern[0] == c;
 }
 
-// Wrapper function
-bool match_patterns(const std::string &input, const std::string &pattern) {
-    if (!pattern.empty() && pattern[0] == '^') {
-        int consumed = match_once(input, pattern.substr(1));
-        return consumed >= 0 && consumed == (int)input.size();
+// Recursive pattern matcher
+bool match_pattern(const std::string &input, const std::string &pattern) {
+    if (pattern.empty()) return true;
+    if (pattern[0] == '$') return input.empty();
+    if (input.empty()) return false;
+
+    // Handle group with alternation
+    if (pattern[0] == '(') {
+        int close = find_closing_paren(pattern, 0);
+        std::string group = pattern.substr(1, close - 1);
+        std::string remaining = pattern.substr(close + 1);
+        char quant = (!remaining.empty() && (remaining[0] == '+' || remaining[0] == '?')) ? remaining[0] : 0;
+        if (quant) remaining = remaining.substr(1);
+
+        std::vector<std::string> options = split_alternation(group);
+
+        for (auto &opt : options) {
+            // Try to match the option once
+            for (size_t i = 1; i <= input.size(); i++) {
+                if (match_pattern(input.substr(0,i), opt)) {
+                    std::string rest = input.substr(i);
+                    if (quant == '+') {
+                        size_t pos = i;
+                        while (pos <= input.size()) {
+                            if (match_pattern(input.substr(pos), remaining)) return true;
+                            bool matched = false;
+                            for (size_t j = 1; j <= input.size()-pos; j++) {
+                                if (match_pattern(input.substr(pos,pos+j-pos), opt)) { pos += j; matched = true; break; }
+                            }
+                            if (!matched) break;
+                        }
+                    } else if (quant == '?') {
+                        if (match_pattern(rest, remaining) || match_pattern(input, remaining)) return true;
+                    } else {
+                        if (match_pattern(rest, remaining)) return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
-    // Try match starting at each position
+
+    // Quantifiers for single character
+    if (pattern.size() > 1 && (pattern[1] == '+' || pattern[1] == '?')) {
+        char quant = pattern[1];
+        size_t consumed = 0;
+        if (match_char(input[0], std::string(1, pattern[0]), consumed)) {
+            size_t pos = 1;
+            if (quant == '+') {
+                while (pos < input.size() && input[pos] == input[0]) pos++;
+            }
+            return match_pattern(input.substr(pos), pattern.substr(2));
+        } else if (quant == '?') {
+            return match_pattern(input, pattern.substr(2));
+        } else {
+            return false;
+        }
+    }
+
+    // Single character match
+    size_t consumed = 0;
+    if (match_char(input[0], pattern, consumed)) return match_pattern(input.substr(consumed), pattern.substr(consumed));
+
+    return false;
+}
+
+// Handle ^ anchor
+bool match_patterns(const std::string &input, const std::string &pattern) {
+    if (!pattern.empty() && pattern[0] == '^') return match_pattern(input, pattern.substr(1));
     for (size_t i = 0; i <= input.size(); i++) {
-        int consumed = match_once(input.substr(i), pattern);
-        if (consumed >= 0) return true;
+        if (match_pattern(input.substr(i), pattern)) return true;
     }
     return false;
 }
 
-int main(int argc, char *argv[]) {
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
-
+int main(int argc, char* argv[]) {
     if (argc != 3) return 1;
     if (std::string(argv[1]) != "-E") return 1;
 
@@ -137,3 +134,4 @@ int main(int argc, char *argv[]) {
 
     return match_patterns(input, pattern) ? 0 : 1;
 }
+
