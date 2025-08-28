@@ -5,11 +5,11 @@
 
 using namespace std;
 
-// Global state for captured group (only one group for this stage)
+// Global state for a single capturing group
 unordered_map<int, string> captured_group;
 
-// Recursive function: returns match length, or -1 if no match
-int match_recursive(const string& pattern, const string& text, int& group_count) {
+// Recursive function: returns match length or -1 on failure
+int match_recursive(const string &pattern, const string &text, int &group_count) {
     if (pattern.empty()) return 0;
     if (pattern[0] == '$' && pattern.size() == 1) return text.empty() ? 0 : -1;
 
@@ -28,9 +28,9 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
             int len = match_recursive(left, text, group_count);
             if (len != -1) return len;
 
-            // Restore state and try right side
             group_count = original_group_count;
             captured_group = original_captures;
+
             return match_recursive(right, text, group_count);
         }
     }
@@ -82,27 +82,27 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
         return -1;
     }
 
+    // Capturing group
     if (pattern[0] == '(') {
-    string group_content = pattern.substr(1, atom_len - 2);
-    int current_capture_index = ++group_count;
+        string group_content = pattern.substr(1, atom_len - 2);
+        int current_capture_index = ++group_count;
 
-    // Match group content greedily
-    for (int end = (int)text.size(); end >= 0; --end) {
-        string candidate = text.substr(0, end);
-        int group_len = match_recursive(group_content, candidate, group_count);
-        if (group_len != -1 && group_len == (int)candidate.size()) {
-            captured_group[current_capture_index] = candidate;
-            int rest_len = match_recursive(rest, text.substr(candidate.size()), group_count);
-            if (rest_len != -1) return candidate.size() + rest_len;
-            captured_group.erase(current_capture_index); // backtrack
+        for (int end = (int)text.size(); end >= 0; --end) {
+            string candidate = text.substr(0, end);
+            int group_len = match_recursive(group_content, candidate, group_count);
+            if (group_len == (int)candidate.size()) {
+                captured_group[current_capture_index] = candidate;
+                int rest_len = match_recursive(rest, text.substr(candidate.size()), group_count);
+                if (rest_len != -1) return candidate.size() + rest_len;
+                captured_group.erase(current_capture_index); // backtrack
+            }
         }
+        return -1;
     }
-    return -1;
-}
 
     if (text.empty()) return -1;
 
-    // Handle backreference
+    // Backreference
     if (pattern[0] == '\\' && isdigit(pattern[1])) {
         int group_num = pattern[1] - '0';
         if (captured_group.count(group_num)) {
@@ -115,20 +115,23 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
         return -1;
     }
 
-    // Handle escapes \d \w
-    if (pattern[0] == '\\' && pattern[1] == 'd' && isdigit(text[0])) {
-        int len = match_recursive(rest, text.substr(1), group_count);
-        if (len != -1) return 1 + len;
-    }
-    if (pattern[0] == '\\' && pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_')) {
-        int len = match_recursive(rest, text.substr(1), group_count);
-        if (len != -1) return 1 + len;
+    // Escapes \d \w
+    if (pattern[0] == '\\') {
+        if (pattern[1] == 'd' && isdigit(text[0])) {
+            int len = match_recursive(rest, text.substr(1), group_count);
+            if (len != -1) return 1 + len;
+        }
+        if (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_')) {
+            int len = match_recursive(rest, text.substr(1), group_count);
+            if (len != -1) return 1 + len;
+        }
+        return -1;
     }
 
     // Character class
     if (pattern[0] == '[') {
         bool is_negated = pattern[1] == '^';
-        string group = pattern.substr(is_negated ? 2 : 1, atom_len - (is_negated ? 2 : 1) -1);
+        string group = pattern.substr(is_negated ? 2 : 1, atom_len - (is_negated ? 2 : 1) - 1);
         bool found = group.find(text[0]) != string::npos;
         if (is_negated != found) {
             int len = match_recursive(rest, text.substr(1), group_count);
@@ -146,17 +149,15 @@ int match_recursive(const string& pattern, const string& text, int& group_count)
     return -1;
 }
 
-// Entry point for regex matching
-bool match_pattern(const string& input_line, const string& pattern) {
+// Entry point
+bool match_pattern(const string &input_line, const string &pattern) {
     if (pattern.empty()) return true;
 
-    // Anchored at start
     if (pattern[0] == '^') {
         int group_count = 0;
         return match_recursive(pattern.substr(1), input_line, group_count) == (int)input_line.size();
     }
 
-    // Unanchored
     for (size_t i = 0; i <= input_line.size(); ++i) {
         captured_group.clear();
         int group_count = 0;
@@ -166,9 +167,10 @@ bool match_pattern(const string& input_line, const string& pattern) {
     return false;
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     cout << unitbuf;
     cerr << unitbuf;
+
     if (argc != 3) { cerr << "Expected two arguments\n"; return 1; }
     string flag = argv[1], pattern = argv[2];
     if (flag != "-E") { cerr << "Expected first argument to be '-E'\n"; return 1; }
@@ -176,6 +178,5 @@ int main(int argc, char* argv[]) {
     string input_line;
     getline(cin, input_line);
 
-    if (match_pattern(input_line, pattern)) return 0;
-    else return 1;
+    return match_pattern(input_line, pattern) ? 0 : 1;
 }
