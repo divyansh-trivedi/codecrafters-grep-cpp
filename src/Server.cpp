@@ -1,8 +1,12 @@
-// Pattern.h
-#ifndef PATTERN_H
-#define PATTERN_H
-
+#include <iostream>
+#include <fstream>
+#include <vector>
 #include <string>
+#include <filesystem>
+#include <cctype>
+#include <stdexcept>
+
+// --- Start of Merged Pattern.h and Pattern.cpp ---
 
 class Pattern {
 public:
@@ -25,12 +29,6 @@ private:
     std::string source_pattern;
 };
 
-#endif // PATTERN_H
-```cpp
-// Pattern.cpp
-#include "Pattern.h"
-#include <cctype>
-#include <vector>
 
 Pattern::Pattern(const std::string& pattern) : compiled_pattern(pattern) {}
 
@@ -40,12 +38,13 @@ bool Pattern::matches(const std::string& text) const {
         return match_here(text, compiled_pattern.substr(1));
     }
     std::string remaining_text = text;
-    while (!remaining_text.empty()) {
-        if (match_here(remaining_text, compiled_pattern)) {
+    // Loop to try matching from every start position
+    for (size_t i = 0; i < text.length(); ++i) {
+        if (match_here(text.substr(i), compiled_pattern)) {
             return true;
         }
-        remaining_text = remaining_text.substr(1);
     }
+    // Also check for patterns that can match an empty string (like '$')
     return match_here("", compiled_pattern);
 }
 
@@ -58,12 +57,13 @@ bool Pattern::match_here(const std::string& text, const std::string& regexp) con
             return match_question_mark(text, regexp[0], regexp.substr(2));
         }
         if (regexp[1] == '+') {
+            // '+' must match at least one character
             return !text.empty() && (regexp[0] == '.' || text[0] == regexp[0]) &&
                    match_plus(text.substr(1), regexp[0], regexp.substr(2));
         }
     }
 
-    if (regexp[0] == '(' && regexp.back() == ')') {
+    if (!regexp.empty() && regexp[0] == '(' && regexp.back() == ')') {
         std::string content = regexp.substr(1, regexp.length() - 2);
         size_t pipe_pos = content.find('|');
         if (pipe_pos != std::string::npos) {
@@ -81,7 +81,7 @@ bool Pattern::match_here(const std::string& text, const std::string& regexp) con
         return !text.empty() && (isalnum(text[0]) || text[0] == '_') && match_here(text.substr(1), regexp.substr(2));
     }
 
-    if (regexp[0] == '[') {
+    if (!regexp.empty() && regexp[0] == '[') {
         size_t close_bracket = regexp.find(']');
         if (close_bracket != std::string::npos) {
             std::string content = regexp.substr(1, close_bracket - 1);
@@ -105,22 +105,28 @@ bool Pattern::match_here(const std::string& text, const std::string& regexp) con
 }
 
 bool Pattern::match_plus(const std::string& text, char match_char, const std::string& regexp) const {
-    std::string remaining_text = text;
-    while (!remaining_text.empty() && (remaining_text[0] == match_char || match_char == '.')) {
-        if (match_here(remaining_text.substr(1), regexp)) {
+    std::string current_text = text;
+    // This implements a greedy match with backtracking
+    if (match_here(current_text, regexp)) {
+        return true; // Match zero more times
+    }
+    while (!current_text.empty() && (current_text[0] == match_char || match_char == '.')) {
+        current_text = current_text.substr(1);
+        if (match_here(current_text, regexp)) {
             return true;
         }
-        remaining_text = remaining_text.substr(1);
     }
     return false;
 }
 
 bool Pattern::match_question_mark(const std::string& text, char match_char, const std::string& regexp) const {
+    // Path 1: Match the optional character
     if (!text.empty() && (text[0] == match_char || match_char == '.')) {
         if (match_here(text.substr(1), regexp)) {
             return true;
         }
     }
+    // Path 2 (Backtrack): Skip the optional character
     return match_here(text, regexp);
 }
 
@@ -129,14 +135,8 @@ PatternCompiler::PatternCompiler(const std::string& pattern) : source_pattern(pa
 Pattern PatternCompiler::compile() {
     return Pattern(source_pattern);
 }
-```cpp
-// Main.cpp
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <string>
-#include <filesystem>
-#include "Pattern.h"
+
+// --- End of Merged Pattern.h and Pattern.cpp ---
 
 namespace fs = std::filesystem;
 
@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
             std::vector<std::string> filepaths(args.begin() + 3, args.end());
             searchTextFiles(pattern, filepaths);
         } else if (firstFlag == "-r") {
-            if (args.size() < 4 || args[2] != "-E") {
+            if (args.size() < 5 || args[2] != "-E") {
                  std::cerr << "Usage: " << argv[0] << " -r -E \"pattern\" <directory>" << std::endl;
                  return 1;
             }
@@ -213,10 +213,24 @@ void handleRecursive(const Pattern& pattern, const std::string& filepath) {
     if (fs::is_directory(startPath)) {
         for (const auto& entry : fs::recursive_directory_iterator(startPath)) {
             if (fs::is_regular_file(entry)) {
-                searchTextFiles(pattern, {entry.path().string()});
+                // To avoid exiting early, we capture the return status of searchTextFiles
+                // This is a simplified approach; a more robust solution would not use exit() inside this function.
+                // For this project, we'll assume a single recursive search is the main goal.
+                std::ifstream file(entry.path());
+                if(file.is_open()){
+                    std::string line;
+                    while(std::getline(file, line)){
+                        if(pattern.matches(line)){
+                            foundOne = true;
+                            std::cout << entry.path().string() << ":" << line << std::endl;
+                        }
+                    }
+                }
             }
         }
     } else {
         searchTextFiles(pattern, {filepath});
+        return; // searchTextFiles will exit
     }
+    exit(foundOne ? 0 : 1);
 }
