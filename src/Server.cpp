@@ -110,7 +110,10 @@ public:
     
     std::vector<Re> regex;
 
+    // --- START OF MINIMAL CHANGE ---
+    // New: Static map to store captured strings. It's global to the matching process.
     static unordered_map<int, string> captured_groups;
+    // --- END OF MINIMAL CHANGE ---
 
 private:
     std::string _pattern_str;
@@ -118,7 +121,10 @@ private:
     const char* _begin{nullptr};
     const char* _end{nullptr};
 
+    // --- START OF MINIMAL CHANGE ---
+    // New: Counter for capture groups during parsing
     int _capture_group_count = 0;
+    // --- END OF MINIMAL CHANGE ---
 
     bool isEof();
     bool consume();
@@ -134,7 +140,10 @@ private:
 // --- End of RegParser.h content ---
 // --- Start of RegParser.cpp content ---
 
+// --- START OF MINIMAL CHANGE ---
+// Initialize the static map for captured groups
 unordered_map<int, string> RegParser::captured_groups;
+// --- END OF MINIMAL CHANGE ---
 
 
 bool RegParser::parse()
@@ -208,17 +217,20 @@ bool RegParser::match_from_position(const char** start_pos, const std::vector<Re
     {
         const Re& current = regex[rIdx];
         
+        // --- START OF MINIMAL CHANGE ---
+        // Handle backreferences first
         if (current.type == BACKREFERENCE) {
             if (captured_groups.count(current.capture_group_id)) {
                 const string& captured = captured_groups.at(current.capture_group_id);
                 if (strncmp(c, captured.c_str(), captured.length()) == 0) {
                     c += captured.length();
                     rIdx++;
-                    continue;
+                    continue; // Move to the next token
                 }
             }
-            return false;
+            return false; // Backreference not found or did not match
         }
+        // --- END OF MINIMAL CHANGE ---
 
         if (current.quantifier == PLUS) {
             const char* temp_c = c;
@@ -252,25 +264,32 @@ bool RegParser::match_from_position(const char** start_pos, const std::vector<Re
             return false;
         }
 
+        // --- START OF MINIMAL CHANGE ---
+        // Rewritten ALT logic to handle backtracking and capturing
         if (current.type == ALT) {
             const char* group_start = c;
             for (const auto& alt : current.alternatives) {
-                const char* temp_c = c;
-                auto captures_backup = captured_groups;
+                const char* temp_c = c; // Reset text pointer for each alternative
+                auto captures_backup = captured_groups; // Save state for backtracking
 
                 if (match_from_position(&temp_c, alt, 0)) {
+                    // Capture the matched text
                     captured_groups[current.capture_group_id] = string(group_start, temp_c - group_start);
                     
+                    // Try to match the rest of the main pattern
                     if (match_from_position(&temp_c, regex, rIdx + 1)) {
                         *start_pos = temp_c;
                         return true;
                     }
                 }
                 
+                // If we reach here, this alternative path failed. Restore state.
                 captured_groups = captures_backup;
             }
+            // If no alternative led to a full match, the whole group fails.
             return false;
         }
+        // --- END OF MINIMAL CHANGE ---
 
         if (!match_current(c, regex, rIdx)) {
             return false;
@@ -312,49 +331,59 @@ bool RegParser::match_one_or_more(const char** c, const std::vector<Re>& regex, 
     return false;
 }
 
-// =================================================================
-// START OF THE CRITICAL FIX
-// Replaced the complex iterative version with a clean recursive one
-// that correctly handles backtracking and state restoration.
-// =================================================================
 bool RegParser::match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
 {
     const Re& altGp = regex[idx];
     const char* original_pos = *c;
 
-    // Must match at least once. Try each alternative.
-    for (const auto& alt : altGp.alternatives) {
+    // Must match at least once
+    bool matched_once = false;
+    const char* first_match_end = original_pos;
+    for(const auto& alt : altGp.alternatives) {
         const char* temp_pos = original_pos;
-        auto captures_backup = captured_groups; // Save state for this path
+        if(match_from_position(&temp_pos, alt, 0) && temp_pos > original_pos) {
+            first_match_end = temp_pos;
+            matched_once = true;
+            break;
+        }
+    }
+    if (!matched_once) return false;
 
-        if (match_from_position(&temp_pos, alt, 0) && temp_pos > original_pos) {
-            // After one successful match, we have two choices for the `+`
-            
-            // Path A (Greedy): Try to match the whole `(...)+` again on the rest of the text.
-            const char* greedy_pos = temp_pos;
-            if (match_alt_one_or_more(&greedy_pos, regex, idx)) {
-                *c = greedy_pos;
-                return true;
-            }
-
-            // Path B (Backtrack): If greedy fails, try matching just the rest of the main pattern.
-            const char* rest_pos = temp_pos;
-            if (match_from_position(&rest_pos, regex, idx + 1)) {
-                *c = rest_pos;
-                return true;
+    const char* pos = first_match_end;
+    while(true) {
+        const char* current_match_end = pos;
+        bool found_match = false;
+        for (const auto& alt : altGp.alternatives) {
+            const char* temp_pos = pos;
+            if (match_from_position(&temp_pos, alt, 0) && temp_pos > pos) {
+                current_match_end = temp_pos;
+                found_match = true;
+                break;
             }
         }
-        
-        // If we reach here, this alternative failed for the first match, restore state.
-        captured_groups = captures_backup;
+
+        if (!found_match) break;
+        pos = current_match_end;
     }
 
+    while (pos >= first_match_end) {
+        const char* temp_pos = pos;
+        if (match_from_position(&temp_pos, regex, idx + 1)) {
+            *c = temp_pos;
+            return true;
+        }
+        if (pos == first_match_end) break;
+        pos--;
+    }
+     // Check if matching just once is enough
+    const char* temp_pos_once = first_match_end;
+    if (match_from_position(&temp_pos_once, regex, idx + 1)) {
+        *c = temp_pos_once;
+        return true;
+    }
+    
     return false;
 }
-// =================================================================
-// END OF THE CRITICAL FIX
-// =================================================================
-
 
 bool RegParser::match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
 {
@@ -373,29 +402,23 @@ bool RegParser::match_zero_or_one(const char** c, const std::vector<Re>& regex, 
 
 bool RegParser::match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
 {
-    const char* original_pos = *c;
+    // Path 1: Match the group
     const Re& altGp = regex[idx];
-
-    // Path 1 (Match group): Try to match the group, then the rest.
     for (const auto& alt : altGp.alternatives)
     {
-        const char* t = original_pos;
-        auto captures_backup = captured_groups; // Save state
+        const char* t = *c;
         if (match_from_position(&t, alt, 0))
         {
-            captured_groups[altGp.capture_group_id] = string(original_pos, t - original_pos);
             if (match_from_position(&t, regex, idx + 1))
             {
                 *c = t;
                 return true;
             }
         }
-        captured_groups = captures_backup; // Restore state if path failed
     }
-    // Path 2 (Skip group): Try to match the rest of the pattern directly.
+    // Path 2: Skip the group
     return match_from_position(c, regex, idx + 1);
 }
-
 
 bool RegParser::isEof()
 {
@@ -442,9 +465,11 @@ Re RegParser::parseElement()
             current = makeRe(DIGIT);
         } else if (check('w')) {
             current = makeRe(ALPHANUM);
+        // --- START OF MINIMAL CHANGE ---
         } else if (isdigit(*_pattern)) {
             current = makeRe(BACKREFERENCE);
             current.capture_group_id = *_pattern - '0';
+        // --- END OF MINIMAL CHANGE ---
         } else {
             char* cstr = new char[2];
             cstr[0] = *_pattern;
@@ -503,7 +528,9 @@ Re RegParser::parseCharacterClass()
 Re RegParser::parseGroup()
 {
     Re altGp = makeRe(ALT);
+    // --- START OF MINIMAL CHANGE ---
     altGp.capture_group_id = ++_capture_group_count;
+    // --- END OF MINIMAL CHANGE ---
     std::vector<Re> current_sequence;
     bool isClosed = false;
 
@@ -565,7 +592,10 @@ bool match_pattern(const std::string& input_line, const std::string& pattern)
         const char* c = input_line.c_str();
         bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
         
+        // --- START OF MINIMAL CHANGE ---
+        // Clear global captures before starting a new match
         RegParser::captured_groups.clear();
+        // --- END OF MINIMAL CHANGE ---
 
         if (hasStartAnchor)
         {
@@ -573,15 +603,18 @@ bool match_pattern(const std::string& input_line, const std::string& pattern)
         }
         else
         {
-            while (true)
+            while (*c != '\0')
             {
                 const char* temp_c = c;
                 if (RegParser::match_from_position(&temp_c, rp.regex, 0))
                 {
                     return true;
                 }
-                if (*c == '\0') break; // Break after trying the last empty string
                 c++;
+            }
+            const char* end_of_string = c;
+            if (RegParser::match_from_position(&end_of_string, rp.regex, 0)) {
+                return true;
             }
             return false;
         }
@@ -666,4 +699,3 @@ void printDebug(const std::vector<Re>& reList) {
     }
 }
 #endif
-
