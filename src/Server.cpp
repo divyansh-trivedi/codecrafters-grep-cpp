@@ -1,472 +1,233 @@
-#include <ctype.h>
-
-#include <algorithm>
-#include <filesystem>
-#include <fstream>
-#include <functional>
 #include <iostream>
-#include <map>
-#include <memory>
 #include <string>
-#include <string_view>
-#include <span>
 #include <vector>
+#include <cctype>
+#include <stdexcept>
+#include <unordered_map>
 
-std::vector<std::string> find_files_recursively(std::filesystem::path directory) {
-    std::vector<std::string> filenames;
-    if(!std::filesystem::is_directory(directory))
-        return {directory};
-    std::filesystem::recursive_directory_iterator iter(directory);
-    for(const std::filesystem::directory_entry &entry : iter) {
-        if(!std::filesystem::is_directory(entry)) {
-            filenames.push_back(entry.path());
+using namespace std;
+
+// --- Global state for captured groups ---
+// This map stores the text matched by each capturing group, like (cat).
+unordered_map<int, string> captured_groups;
+
+// Forward declaration for our main recursive function
+int match_recursive(const string& pattern, const string& text, int& group_count);
+
+/**
+ * The main entry point for the regex engine.
+ * It handles the start-of-line anchor `^` and the unanchored search loop.
+ */
+bool match_pattern(const string& input_line, const string& pattern) {
+    if (pattern.empty()) return true;
+
+    // If the pattern is anchored with '^', we only try to match from the start.
+    // The match must consume the entire input line.
+    if (pattern[0] == '^') {
+        int group_count = 0;
+        return match_recursive(pattern.substr(1), input_line, group_count) == (int)input_line.length();
+    }
+
+    // For a normal, unanchored pattern, we loop through the input.
+    // We try to find a match starting at every possible position.
+    for (size_t i = 0; i <= input_line.length(); ++i) {
+        captured_groups.clear(); // Reset captures for each new attempt
+        int group_count = 0;
+        if (match_recursive(pattern, input_line.substr(i), group_count) != -1) {
+            return true;
         }
     }
-    return filenames;
+    return false;
 }
 
-struct State {
-    std::shared_ptr<State> out, out1;
-    int c = -1;
-    std::vector<int> match_set;
-    int lastlist = -1;
-    std::vector<int> capture_ids;
-};
-int capture_id_counter = 0;
+/**
+ * The core recursive engine.
+ * Tries to match the `pattern` against the `text`.
+ * Returns the length of the matched text, or -1 if no match is found.
+ */
+int match_recursive(const string& pattern, const string& text, int& group_count) {
+    // Base Case 1: An empty pattern successfully matches 0 characters.
+    if (pattern.empty()) return 0;
 
-enum {
-    Default = -1,
-    Split = 256,
-    MatchAny = 257,
-    MatchWord = 258,
-    MatchDigit = 259,
-    MatchChoice = 260,
-    MatchAntiChoice = 261,
-    MatchStart = 262,
-    MatchEnd = 263,
-
-    Epsilon = 299,
-    BackRefStart = 300,
-    Matched = 1000,
-};
-
-struct Fragment { 
-    std::shared_ptr<State> start; 
-    std::vector<std::shared_ptr<State>*> out; 
-};
-
-std::shared_ptr<State> regex2nfa(std::string_view regex);
-Fragment parse(std::string_view &regex, Fragment lhs, int min_prec);
-
-void capture_fragment(std::shared_ptr<State> start) {
-    while(start && start->c >= 0) {
-        if(start->c == Split && start->out1)
-            capture_fragment(start->out1);
-        if(std::find(start->capture_ids.begin(), start->capture_ids.end(), capture_id_counter) != start->capture_ids.end())
-            break;
-        start->capture_ids.insert(start->capture_ids.begin(), capture_id_counter);
-        start = start->out;
+    // Base Case 2: '$' anchor only matches at the very end of the text.
+    if (pattern[0] == '$' && pattern.length() == 1) {
+        return text.empty() ? 0 : -1;
     }
-}
 
-Fragment parse_primary(std::string_view &regex) {
-    std::shared_ptr<State> state = std::make_shared<State>();
-    Fragment frag{state, {&state->out}};
-    char c = regex.front();
-    regex.remove_prefix(1);
-    switch(c) {
-        case '.':
-            state->c = MatchAny;
-            break;
-        case '^':
-            state->c = MatchStart;
-            break;
-        case '$':
-            state->c = MatchEnd;
-            break;
-        case '\\':
-            c = regex.front();
-            regex.remove_prefix(1);
-            switch(c) {
-                case 'd':
-                    state->c = MatchDigit;
+    // --- Operator Precedence: Handle lowest precedence first ---
+    // Handle top-level alternation (e.g., "cat|dog"). This is the lowest precedence operation.
+    int depth = 0;
+    for (int i = pattern.length() - 1; i >= 0; --i) {
+        if (pattern[i] == ')') depth++;
+        else if (pattern[i] == '(') depth--;
+        else if (pattern[i] == '|' && depth == 0) {
+            string left_alt = pattern.substr(0, i);
+            string right_alt = pattern.substr(i + 1);
+            
+            // Save state before trying the left path
+            int original_group_count = group_count;
+            auto original_captures = captured_groups;
+
+            int len = match_recursive(left_alt, text, group_count);
+            if (len != -1) return len;
+
+            // If left path failed, restore state and try the right path
+            group_count = original_group_count;
+            captured_groups = original_captures;
+            
+            return match_recursive(right_alt, text, group_count);
+        }
+    }
+
+    // --- Atom Identification ---
+    // Determine the "atom" (the fundamental unit to match) and any quantifier that follows it.
+    size_t atom_len = 1;
+    if (pattern[0] == '\\' && pattern.length() > 1) {
+        atom_len = 2;
+    } else if (pattern[0] == '[') {
+        size_t end_bracket = pattern.find(']', 1);
+        if (end_bracket != string::npos) atom_len = end_bracket + 1;
+    } else if (pattern[0] == '(') {
+        int level = 0;
+        for (size_t i = 1; i < pattern.length(); ++i) {
+            if (pattern[i] == '(') level++;
+            else if (pattern[i] == ')') {
+                if (level-- == 0) {
+                    atom_len = i + 1;
                     break;
-                case 'w':
-                    state->c = MatchWord;
-                    break;
-                case '\\': case '(': case '[':
-                case ')': case ']': case '*':
-                case '+': case '?': case '.':
-                case '^': case '$': case '|':
-                    state->c = c;
-                    break;
-                case '1': case '2': case '3': 
-                case '4': case '5': case '6': 
-                case '7': case '8': case '9':
-                    state->c = BackRefStart + c - '0';
-                    break;
-                default:
-                    throw std::runtime_error(std::string("Unrecognized escaped character '")+c+'\'');
+                }
             }
-            break;
-        case '[': {
-                bool neg = regex.front() == '^';
-                if(neg) regex.remove_prefix(1);
-                state->c = neg ? MatchAntiChoice : MatchChoice;
-                while(regex.front() != ']') {
-                    state->match_set.push_back(regex.front());
-                    regex.remove_prefix(1);
-                    if(!regex.size())
-                        throw std::runtime_error("Expected closing ']'.");
+        }
+    }
+
+    char quantifier = (atom_len < pattern.length()) ? pattern[atom_len] : 0;
+    string atom = pattern.substr(0, atom_len);
+    string rest = pattern.substr(atom_len + (quantifier == '?' || quantifier == '+' ? 1 : 0));
+
+    // --- Quantifier Logic with Backtracking ---
+    if (quantifier == '?') {
+        // Save state before trying paths
+        int original_group_count = group_count;
+        auto original_captures = captured_groups;
+
+        // Path A (skip atom): Try matching the rest of the pattern.
+        int len = match_recursive(rest, text, group_count);
+        if (len != -1) return len;
+        
+        // Path B (match atom): Restore state and try matching the atom, then the rest.
+        group_count = original_group_count;
+        captured_groups = original_captures;
+
+        int atom_match_len = match_recursive(atom, text, group_count);
+        if (atom_match_len != -1) {
+            int rest_len = match_recursive(rest, text.substr(atom_match_len), group_count);
+            if (rest_len != -1) return atom_match_len + rest_len;
+        }
+        return -1;
+    }
+
+    if (quantifier == '+') {
+        // A+ is equivalent to A followed by A* (which is like A? recursively).
+        // First, match the atom once (mandatory).
+        int atom_match_len = match_recursive(atom, text, group_count);
+        if (atom_match_len == -1) return -1;
+
+        string remaining_text = text.substr(atom_match_len);
+        
+        // After one match, it's a choice...
+        // Save state before trying the greedy path.
+        int original_group_count = group_count;
+        auto original_captures = captured_groups;
+        
+        // Path A (Greedy): Match the quantified atom `A+` again.
+        int more_len = match_recursive(pattern.substr(0, atom_len + 1), remaining_text, group_count);
+        if (more_len != -1) return atom_match_len + more_len;
+
+        // Path B (Backtrack): If greedy path failed, restore state and match the rest of the pattern.
+        group_count = original_group_count;
+        captured_groups = original_captures;
+        
+        int rest_len = match_recursive(rest, remaining_text, group_count);
+        if (rest_len != -1) return atom_match_len + rest_len;
+        
+        return -1;
+    }
+
+    // --- Atom Matching Logic ---
+    // This part runs if there's no quantifier on the current atom.
+    if (pattern[0] == '(') {
+        string group_content = pattern.substr(1, atom_len - 2);
+        int current_capture_index = ++group_count;
+        
+        int group_len = match_recursive(group_content, text, group_count);
+        if (group_len != -1) {
+            captured_groups[current_capture_index] = text.substr(0, group_len);
+            int rest_len = match_recursive(rest, text.substr(group_len), group_count);
+            if (rest_len != -1) return group_len + rest_len;
+        }
+        captured_groups.erase(current_capture_index); // Backtrack capture if rest failed
+        return -1;
+    }
+    
+    if (text.empty()) return -1; // Cannot match non-group atoms against empty text
+
+    if (pattern[0] == '\\') {
+        if (isdigit(pattern[1])) { // Backreference
+            int group_num = pattern[1] - '0';
+            if (captured_groups.count(group_num)) {
+                string captured = captured_groups[group_num];
+                if (text.rfind(captured, 0) == 0) { // C++20: text.starts_with(captured)
+                    int rest_len = match_recursive(rest, text.substr(captured.length()), group_count);
+                    if (rest_len != -1) return captured.length() + rest_len;
                 }
-                regex.remove_prefix(1);
             }
-            break;
-        case '(':
-            frag = parse_primary(regex);
-            frag = parse(regex, frag, 0);
-            if(regex.front() != ')')
-                throw std::runtime_error("Expected ')' to close expression");
-            regex.remove_prefix(1);
-            capture_fragment(frag.start);
-            capture_id_counter++;
-            break;
-        default:
-            state->c = c;
-            break;
-    }
-    if(regex.size()) {
-        switch(regex.front()) {
-            case '*': {
-                    std::shared_ptr<State> s = std::make_shared<State>();
-                    s->c = Split;
-                    s->out = frag.start;
-                    for(auto o : frag.out)
-                        *o = s;
-                    frag = Fragment{s, {&s->out1}};
-                    regex.remove_prefix(1);
-                }
-                break;
-            case '+': {
-                    std::shared_ptr<State> s = std::make_shared<State>();
-                    s->c = Split;
-                    s->out = frag.start;
-                    for(auto o : frag.out)
-                        *o = s;
-                    //frag = Fragment{frag.start, {&s->out1}};
-                    frag.out = {&s->out1};
-                    regex.remove_prefix(1);
-                }
-                break;
-            case '?': {
-                    std::shared_ptr<State> s = std::make_shared<State>();
-                    s->c = Split;
-                    s->out = frag.start;
-                    frag.start = s;
-                    frag.out.push_back(&s->out1);
-                    regex.remove_prefix(1);
-                }
-                break;
+            return -1;
         }
-    }
-    return frag;
-}
-
-Fragment parse(std::string_view &regex, Fragment lhs, int min_prec) {
-    auto prec = [](char c) { return c == '|' ? 0 : c == ']' || c == ')' ? -1 : 1; };
-    char lookahead = regex.front();
-    while(regex.size() && prec(lookahead) >= min_prec) {
-        char op = lookahead;
-        if(op == '|') regex.remove_prefix(1);
-        Fragment rhs = parse_primary(regex);
-        if(regex.size()) lookahead = regex.front();
-        //std::cout << "Regex size " << regex.size() << std::endl;
-        while(prec(lookahead) > prec(op)) {
-            rhs = parse(regex, rhs, prec(op) + 1);
-            if(!regex.size()) break;
-            lookahead = regex.front();
+        if ((pattern[1] == 'd' && isdigit(text[0])) || (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'))) {
+            int len = match_recursive(rest, text.substr(1), group_count);
+            if (len != -1) return 1 + len;
         }
-        if(op == '|') {
-            std::shared_ptr<State> state = std::make_shared<State>();
-            state->c = Split;
-            state->out = lhs.start;
-            state->out1 = rhs.start;
-            lhs.start = state;
-            lhs.out.insert(lhs.out.end(), rhs.out.begin(), rhs.out.end());
-        } else {
-            for(auto o : lhs.out)
-                *o = rhs.start;
-            lhs.out = rhs.out;
+        return -1;
+    }
+
+    if (pattern[0] == '[') {
+        bool is_negated = pattern[1] == '^';
+        string group = pattern.substr(is_negated ? 2 : 1, atom_len - (is_negated ? 3 : 2));
+        bool found = group.find(text[0]) != string::npos;
+        if (is_negated != found) {
+            int len = match_recursive(rest, text.substr(1), group_count);
+            if (len != -1) return 1 + len;
         }
-        if(!regex.size()) break;
-    }
-    return lhs;
-}
-
-std::shared_ptr<State> regex2nfa(std::string_view regex) {
-    std::shared_ptr<State> matched = std::make_shared<State>();
-    matched->c = Matched;
-    if(regex.size() == 0) {
-        return matched;
-    }
-    Fragment frag = parse_primary(regex);
-    Fragment nfa = parse(regex, frag, 0);
-    for(auto o : nfa.out)
-        *o = matched;
-    return nfa.start;
-}
-
-int listid = 0;
-
-struct CaptureInfo {
-    std::vector<std::string> capture_groups;
-    std::map<int, int> active_groups;
-    int capture_index;
-};
-using List = std::vector<std::pair<CaptureInfo, std::shared_ptr<State>>>;
-
-int ismatch(const List &list) {
-    return std::any_of(list.begin(), list.end(), [](auto s) {
-        return s.second->c == Matched;
-    });
-}
-
-void addstate(std::shared_ptr<State> s, CaptureInfo &cap, List &l) {
-    if(s->lastlist == listid) return;
-
-    s->lastlist = listid;
-    if(s->c == Split) {
-        addstate(s->out, cap, l);
-        addstate(s->out1, cap, l);
-        return;
-    }
-    l.push_back({cap, s});
-}
-
-void startlist(std::shared_ptr<State> s, List &l) {
-    listid++;
-    CaptureInfo cap{};
-    addstate(s, cap, l);
-}
-
-void capture(char c, CaptureInfo &caps, std::shared_ptr<State> s) {
-    for(int id : s->capture_ids) {
-        if(caps.active_groups.find(id) == caps.active_groups.end()) {
-            caps.active_groups[id] = caps.capture_groups.size();
-            caps.capture_groups.emplace_back();
-        }
-        caps.capture_groups[caps.active_groups.at(id)] += c;
-    } 
-}
-
-
-void match_step(List &clist, char c, List &nlist) {
-    listid++;
-    nlist.clear();
-    for(auto [cap, s] : clist) {
-        switch(s->c) {
-            case MatchAny:
-                capture(c, cap, s);
-                addstate(s->out, cap, nlist);
-                break;
-            case MatchDigit:
-                if(isdigit(c)) {
-                    capture(c, cap, s);
-                    addstate(s->out, cap, nlist);
-                }
-                break;
-            case MatchWord:
-                if(isalnum(c) || c == '_') {
-                    capture(c, cap, s);
-                    addstate(s->out, cap, nlist);
-                }
-                break;
-            case MatchChoice:
-                if(std::find(s->match_set.begin(), s->match_set.end(), c) != s->match_set.end()) {
-                    capture(c, cap, s);
-                    addstate(s->out, cap, nlist);
-                }
-                break;
-            case MatchAntiChoice:
-                if(std::find(s->match_set.begin(), s->match_set.end(), c) == s->match_set.end()) {
-                    capture(c, cap, s);
-                    addstate(s->out, cap, nlist);
-                }
-                break;
-            default:
-                if(s->c == c) {
-                    capture(c, cap, s);
-                    addstate(s->out, cap, nlist);
-                } else if(s->c > BackRefStart && cap.capture_groups[s->c - BackRefStart - 1][cap.capture_index] == c) {
-                    cap.capture_index++;
-                    capture(c, cap, s);
-                    if(cap.capture_index >= (int)cap.capture_groups[s->c - BackRefStart - 1].size()) {
-                        cap.capture_index = 0;
-                        addstate(s->out, cap, nlist);
-                    } else {
-                        addstate(s, cap, nlist);
-                    }
-                }
-                break;
-        }
-    }
-}
-
-int matchEpsilonNFA(std::shared_ptr<State> start, std::string_view text) {
-    List clist, nlist;
-    startlist(start, clist);
-    bool started = false;
-    if(start->c == MatchStart) {
-        listid++;
-        nlist.clear();
-        CaptureInfo cap{};
-        addstate(start->out, cap, nlist);
-        std::swap(clist, nlist);
-        started = true;
-    }
-restart:
-    for(char c : text) {
-        match_step(clist, c, nlist);
-        std::swap(clist, nlist);
-        if(!started && clist.empty()) {
-            startlist(start, clist);
-            text.remove_prefix(1);
-            goto restart;
-        }
-        if(ismatch(clist)) return 1;
-    }
-    for(auto [cap, s] : clist) {
-        if(s->c == MatchEnd) {
-            listid++;
-            nlist.clear();
-            addstate(s->out, cap, nlist);
-            std::swap(clist, nlist);
-        }
-    }
-    return ismatch(clist);
-}
-
-int match_recursive(std::string_view input, std::string_view regex) {
-    if(regex.size() == 0 || input.size() == 0) return 1;
-
-    if(regex.front() == '$') return 0; // Already covered end above
-
-    if(regex.front() == '[') {
-
-    } else if(regex.front() == '(') {
-
-    } else if(regex.front() == '\\') {
-
-    } else if(regex.size() > 1 && regex[1] == '*') {
-
-    } else if(regex.size() > 1 && regex[1] == '+') {
-
-    } else if(regex.size() > 1 && regex[1] == '?') {
-
+        return -1;
     }
 
-    if(regex.front() != '.' && regex.front() != input.front()) return 0;
-    input.remove_prefix(1);
-    regex.remove_prefix(1);
-    return match_recursive(input, regex);
-}
-
-int backtracking_matcher(std::string_view input, std::string_view regex) {
-    if(regex.size() == 0) return 1;
-    std::string start_regex = ".*";
-    if(regex.front() == '^')
-        regex.remove_prefix(1);
-    else {
-        start_regex += regex;
-        regex = start_regex;
+    if (pattern[0] == '.' || pattern[0] == text[0]) {
+        int len = match_recursive(rest, text.substr(1), group_count);
+        if (len != -1) return 1 + len;
     }
-    return match_recursive(input, regex);
+
+    return -1;
 }
 
 int main(int argc, char* argv[]) {
-    // Flush after every std::cout / std::cerr
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
-
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    std::cerr << "Logs from your program will appear here" << std::endl;
-
-    bool use_stdin = argc == 3;
-
-    if (argc  < 3) {
-        std::cerr << "Expected at least 3 arguments" << std::endl;
+    cout << unitbuf;
+    cerr << unitbuf;
+    if (argc != 3) {
+        cerr << "Usage: " << argv[0] << " -E \"<pattern>\"" << std::endl;
         return 1;
     }
-
-    bool foundE = false;
-    bool recursive = false;
-
-    std::string pattern;
-    std::vector<std::string> filenames;
-
-    for(int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if(arg[0] == '-') {
-            if(arg.size() < 2 || (arg[1] != 'E' && arg[1] != 'r')) 
-                throw std::runtime_error("Unrecognized flag.");
-            if(arg[1] == 'E')
-                foundE = true;
-            else if(arg[1] == 'r')
-                recursive = true;
-        } else if(pattern == "") {
-            pattern = arg;
-        } else {
-            filenames.push_back(arg);
-        }
-    }
-
-    if(!foundE) {
-        std::cerr << "Expected to find -E flag" << std::endl;
+    string flag = argv[1];
+    string pattern = argv[2];
+    if (flag != "-E") {
+        cerr << "Expected first argument to be '-E'" << endl;
         return 1;
     }
-
-    if(recursive) {
-        std::vector<std::string> tmp = filenames;
-        filenames.clear();
-        for(const auto &dir : tmp) {
-            std::vector<std::string> dirfiles = find_files_recursively(dir);
-            filenames.insert(filenames.end(), dirfiles.begin(), dirfiles.end());
-        }
+    string input_line;
+    getline(cin, input_line);
+    if (match_pattern(input_line, pattern)) {
+        return 0;
+    } else {
+        return 1;
     }
-
-     std::string input_line;
-     bool found_match = false;
-     if(filenames.empty()) {
-        while(std::getline(std::cin, input_line)) {
-            try {
-                std::shared_ptr<State> start = regex2nfa(pattern);
-                if(matchEpsilonNFA(start, input_line)) {
-                    std::cout << input_line << std::endl;
-                    found_match = true;
-                }
-            } catch (const std::runtime_error& e) {
-                std::cerr << e.what() << std::endl;
-                return 1;
-            }
-        }
-     } else {
-        for(const auto &name : filenames) {
-            std::ifstream f(name);
-            while(std::getline(f, input_line)) {
-                try {
-                    std::shared_ptr<State> start = regex2nfa(pattern);
-                    if(matchEpsilonNFA(start, input_line)) {
-                        if(filenames.size() > 1)
-                            std::cout << name << ":";
-                        std::cout << input_line << std::endl;
-                        found_match = true;
-                    }
-                } catch (const std::runtime_error& e) {
-                    std::cerr << e.what() << std::endl;
-                    return 1;
-                }
-            }
-        }
-     }
-     return !found_match;
 }
+
