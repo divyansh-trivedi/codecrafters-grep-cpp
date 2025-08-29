@@ -1,695 +1,472 @@
-#include <iostream>
-#include <string>
-#include <vector>
-#include <cctype>
-#include <stdexcept>
+#include <ctype.h>
+
+#include <algorithm>
+#include <filesystem>
 #include <fstream>
-#include <algorithm> // For std::copy
-#include <cstring>   // For strlen and strcpy
-#include <unordered_map> // For backreferences
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <span>
+#include <vector>
 
-using namespace std;
-
-// --- Start of RegParser.h content ---
-
-typedef enum
-{
-    NONE,
-    PLUS,
-    STAR,
-    MARK
-} Quantifier;
-
-typedef enum
-{
-    SINGLE_CHAR,
-    DIGIT,
-    ALPHANUM,
-    START,
-    END,
-    LIST,
-    ALT,
-    BACKREFERENCE, // New type for \1, \2, etc.
-    ETK, // Error Token
-} RegType;
-
-struct Re; // Forward declaration for recursive struct
-struct Re
-{
-    RegType type;
-    char* ccl; // Character class list or single char
-    bool isNegative;
-    Quantifier quantifier;
-    std::vector<std::vector<Re>> alternatives;
-    int capture_group_id = 0; // New: To identify capture groups and backreferences
-
-    // Destructor to free allocated memory
-    ~Re() {
-        delete[] ccl;
-    }
-
-    // Default constructor
-    Re() : type(ETK), ccl(nullptr), isNegative(false), quantifier(NONE) {}
-
-    // Copy constructor
-    Re(const Re& other) {
-        type = other.type;
-        isNegative = other.isNegative;
-        quantifier = other.quantifier;
-        alternatives = other.alternatives;
-        capture_group_id = other.capture_group_id; // New
-        if (other.ccl) {
-            ccl = new char[strlen(other.ccl) + 1];
-            strcpy(ccl, other.ccl);
-        } else {
-            ccl = nullptr;
+std::vector<std::string> find_files_recursively(std::filesystem::path directory) {
+    std::vector<std::string> filenames;
+    if(!std::filesystem::is_directory(directory))
+        return {directory};
+    std::filesystem::recursive_directory_iterator iter(directory);
+    for(const std::filesystem::directory_entry &entry : iter) {
+        if(!std::filesystem::is_directory(entry)) {
+            filenames.push_back(entry.path());
         }
     }
-
-    // Copy assignment operator
-    Re& operator=(const Re& other) {
-        if (this == &other) {
-            return *this;
-        }
-        delete[] ccl;
-        type = other.type;
-        isNegative = other.isNegative;
-        quantifier = other.quantifier;
-        alternatives = other.alternatives;
-        capture_group_id = other.capture_group_id; // New
-        if (other.ccl) {
-            ccl = new char[strlen(other.ccl) + 1];
-            strcpy(ccl, other.ccl);
-        } else {
-            ccl = nullptr;
-        }
-        return *this;
-    }
-};
-
-class RegParser
-{
-public:
-    RegParser(const std::string& pattern)
-    {
-        _pattern_str = pattern;
-        _pattern = _pattern_str.c_str();
-        _begin = _pattern;
-        _end = _begin + _pattern_str.size();
-    };
-
-    bool parse();
-    Re makeRe(RegType type, char* ccl = nullptr, bool isNegative = false);
-
-    static bool match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx);
-    static bool match_current(const char* c, const std::vector<Re>& regex, int idx);
-    static bool match_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
-    static bool match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx);
-    
-    std::vector<Re> regex;
-
-    // --- START OF MINIMAL CHANGE ---
-    // New: Static map to store captured strings. It's global to the matching process.
-    static unordered_map<int, string> captured_groups;
-    // --- END OF MINIMAL CHANGE ---
-
-private:
-    std::string _pattern_str;
-    const char* _pattern{nullptr};
-    const char* _begin{nullptr};
-    const char* _end{nullptr};
-
-    // --- START OF MINIMAL CHANGE ---
-    // New: Counter for capture groups during parsing
-    int _capture_group_count = 0;
-    // --- END OF MINIMAL CHANGE ---
-
-    bool isEof();
-    bool consume();
-    bool check(char c);
-    bool match(char c);
-
-    Re parseElement();
-    Re parseCharacterClass();
-    Re parseGroup();
-    void applyQuantifiers(Re& element);
-};
-
-// --- End of RegParser.h content ---
-// --- Start of RegParser.cpp content ---
-
-// --- START OF MINIMAL CHANGE ---
-// Initialize the static map for captured groups
-unordered_map<int, string> RegParser::captured_groups;
-// --- END OF MINIMAL CHANGE ---
-
-
-bool RegParser::parse()
-{
-    while (!isEof())
-    {
-        Re element = parseElement();
-        if (element.type == ETK)
-            return false;
-        regex.push_back(element);
-    }
-    return true;
+    return filenames;
 }
 
-Re RegParser::makeRe(RegType type, char* ccl, bool isNegative)
-{
-    Re current;
-    current.type = type;
-    current.ccl = ccl;
-    current.isNegative = isNegative;
-    current.quantifier = NONE;
-    return current;
+struct State {
+    std::shared_ptr<State> out, out1;
+    int c = -1;
+    std::vector<int> match_set;
+    int lastlist = -1;
+    std::vector<int> capture_ids;
+};
+int capture_id_counter = 0;
+
+enum {
+    Default = -1,
+    Split = 256,
+    MatchAny = 257,
+    MatchWord = 258,
+    MatchDigit = 259,
+    MatchChoice = 260,
+    MatchAntiChoice = 261,
+    MatchStart = 262,
+    MatchEnd = 263,
+
+    Epsilon = 299,
+    BackRefStart = 300,
+    Matched = 1000,
+};
+
+struct Fragment { 
+    std::shared_ptr<State> start; 
+    std::vector<std::shared_ptr<State>*> out; 
+};
+
+std::shared_ptr<State> regex2nfa(std::string_view regex);
+Fragment parse(std::string_view &regex, Fragment lhs, int min_prec);
+
+void capture_fragment(std::shared_ptr<State> start) {
+    while(start && start->c >= 0) {
+        if(start->c == Split && start->out1)
+            capture_fragment(start->out1);
+        if(std::find(start->capture_ids.begin(), start->capture_ids.end(), capture_id_counter) != start->capture_ids.end())
+            break;
+        start->capture_ids.insert(start->capture_ids.begin(), capture_id_counter);
+        start = start->out;
+    }
 }
 
-bool RegParser::match_current(const char* c, const std::vector<Re>& regex, int idx)
-{
-    if (*c == '\0') {
-        return regex[idx].type == END;
+Fragment parse_primary(std::string_view &regex) {
+    std::shared_ptr<State> state = std::make_shared<State>();
+    Fragment frag{state, {&state->out}};
+    char c = regex.front();
+    regex.remove_prefix(1);
+    switch(c) {
+        case '.':
+            state->c = MatchAny;
+            break;
+        case '^':
+            state->c = MatchStart;
+            break;
+        case '$':
+            state->c = MatchEnd;
+            break;
+        case '\\':
+            c = regex.front();
+            regex.remove_prefix(1);
+            switch(c) {
+                case 'd':
+                    state->c = MatchDigit;
+                    break;
+                case 'w':
+                    state->c = MatchWord;
+                    break;
+                case '\\': case '(': case '[':
+                case ')': case ']': case '*':
+                case '+': case '?': case '.':
+                case '^': case '$': case '|':
+                    state->c = c;
+                    break;
+                case '1': case '2': case '3': 
+                case '4': case '5': case '6': 
+                case '7': case '8': case '9':
+                    state->c = BackRefStart + c - '0';
+                    break;
+                default:
+                    throw std::runtime_error(std::string("Unrecognized escaped character '")+c+'\'');
+            }
+            break;
+        case '[': {
+                bool neg = regex.front() == '^';
+                if(neg) regex.remove_prefix(1);
+                state->c = neg ? MatchAntiChoice : MatchChoice;
+                while(regex.front() != ']') {
+                    state->match_set.push_back(regex.front());
+                    regex.remove_prefix(1);
+                    if(!regex.size())
+                        throw std::runtime_error("Expected closing ']'.");
+                }
+                regex.remove_prefix(1);
+            }
+            break;
+        case '(':
+            frag = parse_primary(regex);
+            frag = parse(regex, frag, 0);
+            if(regex.front() != ')')
+                throw std::runtime_error("Expected ')' to close expression");
+            regex.remove_prefix(1);
+            capture_fragment(frag.start);
+            capture_id_counter++;
+            break;
+        default:
+            state->c = c;
+            break;
     }
-
-    const Re* current = &regex[idx];
-    switch (current->type)
-    {
-    case DIGIT:
-        return isdigit(*c);
-    case ALPHANUM:
-        return isalnum(*c) || *c == '_';
-    case SINGLE_CHAR:
-        return *c == *current->ccl || *current->ccl == '.';
-    case LIST:
-    {
-        const char* p = current->ccl;
-        bool found = false;
-        while (*p != '\0')
-        {
-            if (*c == *p)
-            {
-                found = true;
+    if(regex.size()) {
+        switch(regex.front()) {
+            case '*': {
+                    std::shared_ptr<State> s = std::make_shared<State>();
+                    s->c = Split;
+                    s->out = frag.start;
+                    for(auto o : frag.out)
+                        *o = s;
+                    frag = Fragment{s, {&s->out1}};
+                    regex.remove_prefix(1);
+                }
                 break;
-            }
-            ++p;
+            case '+': {
+                    std::shared_ptr<State> s = std::make_shared<State>();
+                    s->c = Split;
+                    s->out = frag.start;
+                    for(auto o : frag.out)
+                        *o = s;
+                    //frag = Fragment{frag.start, {&s->out1}};
+                    frag.out = {&s->out1};
+                    regex.remove_prefix(1);
+                }
+                break;
+            case '?': {
+                    std::shared_ptr<State> s = std::make_shared<State>();
+                    s->c = Split;
+                    s->out = frag.start;
+                    frag.start = s;
+                    frag.out.push_back(&s->out1);
+                    regex.remove_prefix(1);
+                }
+                break;
         }
-        return current->isNegative ? !found : found;
     }
-    case START:
-        return true;
-    case END:
-        return *c == '\0';
-    default:
-        return false;
-    }
+    return frag;
 }
 
-bool RegParser::match_from_position(const char** start_pos, const std::vector<Re>& regex, int idx)
-{
-    const char* c = *start_pos;
-    int rIdx = idx;
-    int pattern_length = regex.size();
-
-    while (rIdx < pattern_length)
-    {
-        const Re& current = regex[rIdx];
-        
-        // --- START OF MINIMAL CHANGE ---
-        // Handle backreferences first
-        if (current.type == BACKREFERENCE) {
-            if (captured_groups.count(current.capture_group_id)) {
-                const string& captured = captured_groups.at(current.capture_group_id);
-                if (strncmp(c, captured.c_str(), captured.length()) == 0) {
-                    c += captured.length();
-                    rIdx++;
-                    continue; // Move to the next token
-                }
-            }
-            return false; // Backreference not found or did not match
+Fragment parse(std::string_view &regex, Fragment lhs, int min_prec) {
+    auto prec = [](char c) { return c == '|' ? 0 : c == ']' || c == ')' ? -1 : 1; };
+    char lookahead = regex.front();
+    while(regex.size() && prec(lookahead) >= min_prec) {
+        char op = lookahead;
+        if(op == '|') regex.remove_prefix(1);
+        Fragment rhs = parse_primary(regex);
+        if(regex.size()) lookahead = regex.front();
+        //std::cout << "Regex size " << regex.size() << std::endl;
+        while(prec(lookahead) > prec(op)) {
+            rhs = parse(regex, rhs, prec(op) + 1);
+            if(!regex.size()) break;
+            lookahead = regex.front();
         }
-        // --- END OF MINIMAL CHANGE ---
-
-        if (current.quantifier == PLUS) {
-            const char* temp_c = c;
-            if (current.type == ALT) {
-                if(match_alt_one_or_more(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            } else {
-                if(match_one_or_more(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            }
-            return false;
+        if(op == '|') {
+            std::shared_ptr<State> state = std::make_shared<State>();
+            state->c = Split;
+            state->out = lhs.start;
+            state->out1 = rhs.start;
+            lhs.start = state;
+            lhs.out.insert(lhs.out.end(), rhs.out.begin(), rhs.out.end());
+        } else {
+            for(auto o : lhs.out)
+                *o = rhs.start;
+            lhs.out = rhs.out;
         }
-        
-        if (current.quantifier == MARK) {
-            const char* temp_c = c;
-            if (current.type == ALT) {
-                if(match_alt_zero_or_one(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            } else {
-                if(match_zero_or_one(&temp_c, regex, rIdx)) {
-                    *start_pos = temp_c;
-                    return true;
-                }
-            }
-            return false;
+        if(!regex.size()) break;
+    }
+    return lhs;
+}
+
+std::shared_ptr<State> regex2nfa(std::string_view regex) {
+    std::shared_ptr<State> matched = std::make_shared<State>();
+    matched->c = Matched;
+    if(regex.size() == 0) {
+        return matched;
+    }
+    Fragment frag = parse_primary(regex);
+    Fragment nfa = parse(regex, frag, 0);
+    for(auto o : nfa.out)
+        *o = matched;
+    return nfa.start;
+}
+
+int listid = 0;
+
+struct CaptureInfo {
+    std::vector<std::string> capture_groups;
+    std::map<int, int> active_groups;
+    int capture_index;
+};
+using List = std::vector<std::pair<CaptureInfo, std::shared_ptr<State>>>;
+
+int ismatch(const List &list) {
+    return std::any_of(list.begin(), list.end(), [](auto s) {
+        return s.second->c == Matched;
+    });
+}
+
+void addstate(std::shared_ptr<State> s, CaptureInfo &cap, List &l) {
+    if(s->lastlist == listid) return;
+
+    s->lastlist = listid;
+    if(s->c == Split) {
+        addstate(s->out, cap, l);
+        addstate(s->out1, cap, l);
+        return;
+    }
+    l.push_back({cap, s});
+}
+
+void startlist(std::shared_ptr<State> s, List &l) {
+    listid++;
+    CaptureInfo cap{};
+    addstate(s, cap, l);
+}
+
+void capture(char c, CaptureInfo &caps, std::shared_ptr<State> s) {
+    for(int id : s->capture_ids) {
+        if(caps.active_groups.find(id) == caps.active_groups.end()) {
+            caps.active_groups[id] = caps.capture_groups.size();
+            caps.capture_groups.emplace_back();
         }
+        caps.capture_groups[caps.active_groups.at(id)] += c;
+    } 
+}
 
-        // --- START OF MINIMAL CHANGE ---
-        // Rewritten ALT logic to handle backtracking and capturing
-        if (current.type == ALT) {
-            const char* group_start = c;
-            for (const auto& alt : current.alternatives) {
-                const char* temp_c = c; // Reset text pointer for each alternative
-                auto captures_backup = captured_groups; // Save state for backtracking
 
-                if (match_from_position(&temp_c, alt, 0)) {
-                    // Capture the matched text
-                    captured_groups[current.capture_group_id] = string(group_start, temp_c - group_start);
-                    
-                    // Try to match the rest of the main pattern
-                    if (match_from_position(&temp_c, regex, rIdx + 1)) {
-                        *start_pos = temp_c;
-                        return true;
+void match_step(List &clist, char c, List &nlist) {
+    listid++;
+    nlist.clear();
+    for(auto [cap, s] : clist) {
+        switch(s->c) {
+            case MatchAny:
+                capture(c, cap, s);
+                addstate(s->out, cap, nlist);
+                break;
+            case MatchDigit:
+                if(isdigit(c)) {
+                    capture(c, cap, s);
+                    addstate(s->out, cap, nlist);
+                }
+                break;
+            case MatchWord:
+                if(isalnum(c) || c == '_') {
+                    capture(c, cap, s);
+                    addstate(s->out, cap, nlist);
+                }
+                break;
+            case MatchChoice:
+                if(std::find(s->match_set.begin(), s->match_set.end(), c) != s->match_set.end()) {
+                    capture(c, cap, s);
+                    addstate(s->out, cap, nlist);
+                }
+                break;
+            case MatchAntiChoice:
+                if(std::find(s->match_set.begin(), s->match_set.end(), c) == s->match_set.end()) {
+                    capture(c, cap, s);
+                    addstate(s->out, cap, nlist);
+                }
+                break;
+            default:
+                if(s->c == c) {
+                    capture(c, cap, s);
+                    addstate(s->out, cap, nlist);
+                } else if(s->c > BackRefStart && cap.capture_groups[s->c - BackRefStart - 1][cap.capture_index] == c) {
+                    cap.capture_index++;
+                    capture(c, cap, s);
+                    if(cap.capture_index >= (int)cap.capture_groups[s->c - BackRefStart - 1].size()) {
+                        cap.capture_index = 0;
+                        addstate(s->out, cap, nlist);
+                    } else {
+                        addstate(s, cap, nlist);
                     }
                 }
-                
-                // If we reach here, this alternative path failed. Restore state.
-                captured_groups = captures_backup;
-            }
-            // If no alternative led to a full match, the whole group fails.
-            return false;
-        }
-        // --- END OF MINIMAL CHANGE ---
-
-        if (!match_current(c, regex, rIdx)) {
-            return false;
-        }
-
-        if (current.type != START) {
-            c++;
-        }
-        rIdx++;
-    }
-
-    *start_pos = c;
-    return true;
-}
-
-bool RegParser::match_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const char* t = *c;
-    if (!match_current(t, regex, idx))
-        return false;
-    t++;
-
-    while (*t != '\0' && match_current(t, regex, idx))
-    {
-        t++;
-    }
-
-    while (t >= *c)
-    {
-        const char* test_pos = t;
-        if (match_from_position(&test_pos, regex, idx + 1))
-        {
-            *c = test_pos;
-            return true;
-        }
-        if (t == *c) break;
-        t--;
-    }
-    return false;
-}
-
-// =================================================================
-// START OF THE CRITICAL FIX
-// Replaced the complex iterative version with a clean recursive one
-// that correctly handles backtracking and state restoration.
-// =================================================================
-bool RegParser::match_alt_one_or_more(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const Re& altGp = regex[idx];
-    const char* original_pos = *c;
-
-    // Must match at least once. Try each alternative.
-    for (const auto& alt : altGp.alternatives) {
-        const char* temp_pos = original_pos;
-        auto captures_backup = captured_groups; // Save state for this path
-
-        if (match_from_position(&temp_pos, alt, 0) && temp_pos > original_pos) {
-            // After one successful match, we have two choices for the `+`
-            
-            // Path A (Greedy): Try to match the whole `(...)+` again on the rest of the text.
-            const char* greedy_pos = temp_pos;
-            if (match_alt_one_or_more(&greedy_pos, regex, idx)) {
-                *c = greedy_pos;
-                return true;
-            }
-
-            // Path B (Backtrack): If greedy fails, try matching just the rest of the main pattern.
-            const char* rest_pos = temp_pos;
-            if (match_from_position(&rest_pos, regex, idx + 1)) {
-                *c = rest_pos;
-                return true;
-            }
-        }
-        
-        // If we reach here, this alternative failed for the first match, restore state.
-        captured_groups = captures_backup;
-    }
-
-    return false;
-}
-// =================================================================
-// END OF THE CRITICAL FIX
-// =================================================================
-
-
-bool RegParser::match_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const char* temp_pos = *c;
-    if (match_current(temp_pos, regex, idx))
-    {
-        temp_pos++;
-        if (match_from_position(&temp_pos, regex, idx + 1))
-        {
-            *c = temp_pos;
-            return true;
-        }
-    }
-    return match_from_position(c, regex, idx + 1);
-}
-
-bool RegParser::match_alt_zero_or_one(const char** c, const std::vector<Re>& regex, int idx)
-{
-    const char* original_pos = *c;
-    const Re& altGp = regex[idx];
-
-    // Path 1 (Match group): Try to match the group, then the rest.
-    for (const auto& alt : altGp.alternatives)
-    {
-        const char* t = original_pos;
-        auto captures_backup = captured_groups; // Save state
-        if (match_from_position(&t, alt, 0))
-        {
-            captured_groups[altGp.capture_group_id] = string(original_pos, t - original_pos);
-            if (match_from_position(&t, regex, idx + 1))
-            {
-                *c = t;
-                return true;
-            }
-        }
-        captured_groups = captures_backup; // Restore state if path failed
-    }
-    // Path 2 (Skip group): Try to match the rest of the pattern directly.
-    return match_from_position(c, regex, idx + 1);
-}
-
-
-bool RegParser::isEof()
-{
-    return _pattern >= _end;
-}
-
-bool RegParser::consume()
-{
-    if (!isEof())
-    {
-        _pattern++;
-        return true;
-    }
-    return false;
-}
-
-bool RegParser::check(char c)
-{
-    return !isEof() && *_pattern == c;
-}
-
-bool RegParser::match(char c)
-{
-    if (check(c))
-        return consume();
-    return false;
-}
-
-Re RegParser::parseElement()
-{
-    if (check('^')) {
-        consume();
-        return makeRe(START);
-    }
-    if (check('$')) {
-        consume();
-        return makeRe(END);
-    }
-    if (check('\\')) {
-        consume();
-        if (isEof()) return makeRe(ETK);
-        Re current;
-        if (check('d')) {
-            current = makeRe(DIGIT);
-        } else if (check('w')) {
-            current = makeRe(ALPHANUM);
-        // --- START OF MINIMAL CHANGE ---
-        } else if (isdigit(*_pattern)) {
-            current = makeRe(BACKREFERENCE);
-            current.capture_group_id = *_pattern - '0';
-        // --- END OF MINIMAL CHANGE ---
-        } else {
-            char* cstr = new char[2];
-            cstr[0] = *_pattern;
-            cstr[1] = '\0';
-            current = makeRe(SINGLE_CHAR, cstr);
-        }
-        consume();
-        applyQuantifiers(current);
-        return current;
-    }
-    if (check('[')) {
-        consume();
-        return parseCharacterClass();
-    }
-    if (check('(')) {
-        consume();
-        return parseGroup();
-    }
-    if (!isEof()) {
-        char* cstr = new char[2];
-        cstr[0] = *_pattern;
-        cstr[1] = '\0';
-        consume();
-        Re current = makeRe(SINGLE_CHAR, cstr);
-        applyQuantifiers(current);
-        return current;
-    }
-    return makeRe(ETK);
-}
-
-Re RegParser::parseCharacterClass()
-{
-    Re current = makeRe(LIST);
-    std::string buffer;
-
-    current.isNegative = match('^');
-    while (!isEof() && !check(']'))
-    {
-        buffer.push_back(*_pattern);
-        consume();
-    }
-
-    if (!match(']'))
-    {
-        return makeRe(ETK);
-    }
-
-    char* cstr = new char[buffer.size() + 1];
-    std::copy(buffer.begin(), buffer.end(), cstr);
-    cstr[buffer.size()] = '\0';
-    current.ccl = cstr;
-    applyQuantifiers(current);
-    return current;
-}
-
-Re RegParser::parseGroup()
-{
-    Re altGp = makeRe(ALT);
-    // --- START OF MINIMAL CHANGE ---
-    altGp.capture_group_id = ++_capture_group_count;
-    // --- END OF MINIMAL CHANGE ---
-    std::vector<Re> current_sequence;
-    bool isClosed = false;
-
-    while (!isEof())
-    {
-        if (check('|')) {
-            consume();
-            altGp.alternatives.push_back(current_sequence);
-            current_sequence.clear();
-        } else if (check(')')) {
-            consume();
-            altGp.alternatives.push_back(current_sequence);
-            isClosed = true;
-            break;
-        } else {
-            Re element = parseElement();
-            if (element.type == ETK) return makeRe(ETK);
-            current_sequence.push_back(element);
-        }
-    }
-
-    if (!isClosed) return makeRe(ETK);
-
-    applyQuantifiers(altGp);
-    return altGp;
-}
-
-void RegParser::applyQuantifiers(Re& element)
-{
-    if (!isEof()) {
-        if (check('+')) {
-            element.quantifier = PLUS;
-            consume();
-        } else if (check('?')) {
-            element.quantifier = MARK;
-            consume();
+                break;
         }
     }
 }
 
-// --- End of RegParser.cpp content ---
-// --- Start of Server.cpp content ---
-
-#ifdef DEBUG
-void printDebug(const std::vector<Re>& reList);
-#endif
-
-bool match_pattern(const std::string& input_line, const std::string& pattern)
-{
-    RegParser rp(pattern);
-
-    if (rp.parse())
-    {
-#ifdef DEBUG
-        std::cerr << "--- Parsed Regex Structure ---" << std::endl;
-        printDebug(rp.regex);
-        std::cerr << "----------------------------" << std::endl;
-#endif
-        const char* c = input_line.c_str();
-        bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
-        
-        // --- START OF MINIMAL CHANGE ---
-        // Clear global captures before starting a new match
-        RegParser::captured_groups.clear();
-        // --- END OF MINIMAL CHANGE ---
-
-        if (hasStartAnchor)
-        {
-            return RegParser::match_from_position(&c, rp.regex, 1);
+int matchEpsilonNFA(std::shared_ptr<State> start, std::string_view text) {
+    List clist, nlist;
+    startlist(start, clist);
+    bool started = false;
+    if(start->c == MatchStart) {
+        listid++;
+        nlist.clear();
+        CaptureInfo cap{};
+        addstate(start->out, cap, nlist);
+        std::swap(clist, nlist);
+        started = true;
+    }
+restart:
+    for(char c : text) {
+        match_step(clist, c, nlist);
+        std::swap(clist, nlist);
+        if(!started && clist.empty()) {
+            startlist(start, clist);
+            text.remove_prefix(1);
+            goto restart;
         }
-        else
-        {
-            while (true)
-            {
-                const char* temp_c = c;
-                if (RegParser::match_from_position(&temp_c, rp.regex, 0))
-                {
-                    return true;
-                }
-                if (*c == '\0') break; // Break after trying the last empty string
-                c++;
-            }
-            return false;
+        if(ismatch(clist)) return 1;
+    }
+    for(auto [cap, s] : clist) {
+        if(s->c == MatchEnd) {
+            listid++;
+            nlist.clear();
+            addstate(s->out, cap, nlist);
+            std::swap(clist, nlist);
         }
     }
-    else
-    {
-        throw std::runtime_error("Invalid pattern: " + pattern);
-    }
+    return ismatch(clist);
 }
 
-int main(int argc, char* argv[])
-{
+int match_recursive(std::string_view input, std::string_view regex) {
+    if(regex.size() == 0 || input.size() == 0) return 1;
+
+    if(regex.front() == '$') return 0; // Already covered end above
+
+    if(regex.front() == '[') {
+
+    } else if(regex.front() == '(') {
+
+    } else if(regex.front() == '\\') {
+
+    } else if(regex.size() > 1 && regex[1] == '*') {
+
+    } else if(regex.size() > 1 && regex[1] == '+') {
+
+    } else if(regex.size() > 1 && regex[1] == '?') {
+
+    }
+
+    if(regex.front() != '.' && regex.front() != input.front()) return 0;
+    input.remove_prefix(1);
+    regex.remove_prefix(1);
+    return match_recursive(input, regex);
+}
+
+int backtracking_matcher(std::string_view input, std::string_view regex) {
+    if(regex.size() == 0) return 1;
+    std::string start_regex = ".*";
+    if(regex.front() == '^')
+        regex.remove_prefix(1);
+    else {
+        start_regex += regex;
+        regex = start_regex;
+    }
+    return match_recursive(input, regex);
+}
+
+int main(int argc, char* argv[]) {
+    // Flush after every std::cout / std::cerr
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
 
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
     std::cerr << "Logs from your program will appear here" << std::endl;
 
-    if (argc != 3)
-    {
-        std::cerr << "Usage: " << argv[0] << " -E \"<pattern>\"" << std::endl;
+    bool use_stdin = argc == 3;
+
+    if (argc  < 3) {
+        std::cerr << "Expected at least 3 arguments" << std::endl;
         return 1;
     }
 
-    std::string flag = argv[1];
-    std::string pattern = argv[2];
+    bool foundE = false;
+    bool recursive = false;
 
-    if (flag != "-E")
-    {
-        std::cerr << "Expected first argument to be '-E'" << std::endl;
-        return 1;
-    }
+    std::string pattern;
+    std::vector<std::string> filenames;
 
-    std::string input_line;
-    std::getline(std::cin, input_line);
-
-    try
-    {
-        if (match_pattern(input_line, pattern))
-        {
-            return 0;
+    for(int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if(arg[0] == '-') {
+            if(arg.size() < 2 || (arg[1] != 'E' && arg[1] != 'r')) 
+                throw std::runtime_error("Unrecognized flag.");
+            if(arg[1] == 'E')
+                foundE = true;
+            else if(arg[1] == 'r')
+                recursive = true;
+        } else if(pattern == "") {
+            pattern = arg;
+        } else {
+            filenames.push_back(arg);
         }
-        else
-        {
-            return 1;
-        }
     }
-    catch (const std::runtime_error& e)
-    {
-        std::cerr << "Error: " << e.what() << std::endl;
+
+    if(!foundE) {
+        std::cerr << "Expected to find -E flag" << std::endl;
         return 1;
     }
-}
 
-#ifdef DEBUG
-void printQuantifier(const Re& re);
+    if(recursive) {
+        std::vector<std::string> tmp = filenames;
+        filenames.clear();
+        for(const auto &dir : tmp) {
+            std::vector<std::string> dirfiles = find_files_recursively(dir);
+            filenames.insert(filenames.end(), dirfiles.begin(), dirfiles.end());
+        }
+    }
 
-void printDebug(const std::vector<Re>& reList) {
-    for (const auto& tmp : reList) {
-        switch (tmp.type) {
-            case DIGIT: std::cout << "DIGIT"; break;
-            case ALPHANUM: std::cout << "ALPHANUM"; break;
-            case SINGLE_CHAR: std::cout << "SINGLE CHAR" << " >> " << tmp.ccl; break;
-            case ALT:
-                std::cout << "ALT (Group " << tmp.capture_group_id << ")" << " >> " << std::endl;
-                std::cout << "(" << std::endl;
-                for (size_t i = 0; i < tmp.alternatives.size(); ++i) {
-                    printDebug(tmp.alternatives[i]);
-                    if (i < tmp.alternatives.size() - 1)
-                        std::cout << "|" << std::endl;
+     std::string input_line;
+     bool found_match = false;
+     if(filenames.empty()) {
+        while(std::getline(std::cin, input_line)) {
+            try {
+                std::shared_ptr<State> start = regex2nfa(pattern);
+                if(matchEpsilonNFA(start, input_line)) {
+                    std::cout << input_line << std::endl;
+                    found_match = true;
                 }
-                std::cout << ")";
-                break;
-            case LIST: std::cout << (tmp.isNegative ? "NEGATIVE " : "") << "LIST" << " >> " << tmp.ccl; break;
-            case START: std::cout << "START"; break;
-            case END: std::cout << "END"; break;
-            case BACKREFERENCE: std::cout << "BACKREFERENCE to group " << tmp.capture_group_id; break;
-            case ETK: std::cout << "ETK"; break;
-            default: std::cout << "UNKNOWN"; break;
+            } catch (const std::runtime_error& e) {
+                std::cerr << e.what() << std::endl;
+                return 1;
+            }
         }
-        printQuantifier(tmp);
-        std::cout << std::endl;
-    }
+     } else {
+        for(const auto &name : filenames) {
+            std::ifstream f(name);
+            while(std::getline(f, input_line)) {
+                try {
+                    std::shared_ptr<State> start = regex2nfa(pattern);
+                    if(matchEpsilonNFA(start, input_line)) {
+                        if(filenames.size() > 1)
+                            std::cout << name << ":";
+                        std::cout << input_line << std::endl;
+                        found_match = true;
+                    }
+                } catch (const std::runtime_error& e) {
+                    std::cerr << e.what() << std::endl;
+                    return 1;
+                }
+            }
+        }
+     }
+     return !found_match;
 }
-#endif
-
