@@ -1,211 +1,163 @@
 #include <iostream>
 #include <string>
-#include <stdexcept>
-#include <cctype>
-#include <vector>
 #include <unordered_map>
-
 using namespace std;
 
-// --- Global state for captured groups ---
-unordered_map<int, string> captured_groups;
+bool match_recursive(const std::string &pattern, const std::string &text,
+                     size_t p_pos, size_t t_pos,
+                     std::unordered_map<int, std::string> captures, int group_num) {
+    if (p_pos == pattern.size())
+        return t_pos == text.size();
 
-// Forward declaration for the main recursive function
-int match_recursive(const string& pattern, const string& text, int& group_count);
+    if (pattern[p_pos] == '$' && p_pos + 1 == pattern.size())
+        return t_pos == text.size();
 
-// The main entry point for the regex engine.
-bool match_pattern(const string& input_line, const string& pattern) {
-    if (pattern.empty()) return true;
-
-    if (pattern[0] == '^') {
-        int group_count = 0;
-        // For an anchored pattern, the match must consume the entire line.
-        return match_recursive(pattern.substr(1), input_line, group_count) == (int)input_line.length();
-    }
-
-    // For unanchored patterns, loop and try to match at every position.
-    for (size_t i = 0; i <= input_line.length(); ++i) {
-        captured_groups.clear(); // Reset captures for each new starting position
-        int group_count = 0;
-        if (match_recursive(pattern, input_line.substr(i), group_count) != -1) {
-            return true;
+    // Capturing group with quantifier support right after
+    if (pattern[p_pos] == '(') {
+        // Find closing ')'
+        int depth = 1;
+        size_t close = p_pos + 1;
+        while (close < pattern.size() && depth > 0) {
+            if (pattern[close] == '(')
+                depth++;
+            else if (pattern[close] == ')')
+                depth--;
+            close++;
         }
+        if (depth != 0)
+            return false;
+
+        std::string group_content = pattern.substr(p_pos + 1, close - p_pos - 2);
+        std::string after_group = pattern.substr(close);
+        // Support quantifier after group
+        char quant = 0;
+        if (!after_group.empty() && (after_group[0] == '+' || after_group[0] == '?' || after_group[0] == '*')) {
+            quant = after_group[0];
+            after_group = after_group.substr(1);
+        }
+
+        // Greedy matching for '+' inside a group
+        if (quant == '+') {
+            for (size_t len = 1; t_pos + len <= text.size(); ++len) {
+                auto captures_copy = captures;
+                if (match_recursive(group_content, text.substr(t_pos, len), 0, 0, captures_copy, group_num + 1)) {
+                    captures_copy[group_num] = text.substr(t_pos, len);
+                    size_t next_pos = t_pos + len;
+                    // Try more groups (greedy)
+                    while (true) {
+                        bool extended = false;
+                        for (size_t sublen = 1; next_pos + sublen <= text.size(); ++sublen) {
+                            auto captures_temp = captures_copy;
+                            if (match_recursive(group_content, text.substr(next_pos, sublen), 0, 0, captures_temp, group_num + 1)) {
+                                next_pos += sublen;
+                                captures_copy = captures_temp;
+                                extended = true;
+                                break;
+                            }
+                        }
+                        if (!extended)
+                            break;
+                    }
+                    // Try after group
+                    if (match_recursive(after_group, text, 0, next_pos, captures_copy, group_num + 1))
+                        return true;
+                }
+            }
+            return false;
+        }
+        // Zero or one group '?'
+        if (quant == '?') {
+            // Option 1: skip group
+            if (match_recursive(after_group, text, 0, t_pos, captures, group_num))
+                return true;
+            // Option 2: match one group
+            for (size_t len = 1; t_pos + len <= text.size(); ++len) {
+                auto captures_copy = captures;
+                if (match_recursive(group_content, text.substr(t_pos, len), 0, 0, captures_copy, group_num + 1)) {
+                    captures_copy[group_num] = text.substr(t_pos, len);
+                    if (match_recursive(after_group, text, 0, t_pos + len, captures_copy, group_num + 1))
+                        return true;
+                }
+            }
+            return false;
+        }
+        // Zero or more group '*'
+        if (quant == '*') {
+            if (match_recursive(after_group, text, 0, t_pos, captures, group_num))
+                return true;
+            for (size_t len = 1; t_pos + len <= text.size(); ++len) {
+                auto captures_copy = captures;
+                if (match_recursive(group_content, text.substr(t_pos, len), 0, 0, captures_copy, group_num + 1)) {
+                    captures_copy[group_num] = text.substr(t_pos, len);
+                    size_t next_pos = t_pos + len;
+                    while (true) {
+                        bool extended = false;
+                        for (size_t sublen = 1; next_pos + sublen <= text.size(); ++sublen) {
+                            auto captures_temp = captures_copy;
+                            if (match_recursive(group_content, text.substr(next_pos, sublen), 0, 0, captures_temp, group_num + 1)) {
+                                next_pos += sublen;
+                                captures_copy = captures_temp;
+                                extended = true;
+                                break;
+                            }
+                        }
+                        if (!extended)
+                            break;
+                    }
+                    if (match_recursive(after_group, text, 0, next_pos, captures_copy, group_num + 1))
+                        return true;
+                }
+            }
+            return false;
+        }
+        // No quantifier - match group exactly once
+        for (size_t len = 0; t_pos + len <= text.size(); ++len) {
+            auto captures_copy = captures;
+            if (match_recursive(group_content, text.substr(t_pos, len), 0, 0, captures_copy, group_num + 1)) {
+                captures_copy[group_num] = text.substr(t_pos, len);
+                if (match_recursive(after_group, text, 0, t_pos + len, captures_copy, group_num + 1))
+                    return true;
+            }
+        }
+        return false;
     }
+
+    // Backreference
+    if (pattern[p_pos] == '\\' && p_pos +1 < pattern.size() && isdigit(pattern[p_pos+1])) {
+        int ref = pattern[p_pos+1] - '0';
+        if (!captures.count(ref))
+            return false;
+        std::string cap = captures[ref];
+        if (text.substr(t_pos, cap.size()) == cap)
+            return match_recursive(pattern, text, p_pos + 2, t_pos + cap.size(), captures, group_num);
+        return false;
+    }
+
+    // Literal, dot, escapes
+    if (t_pos >= text.size())
+        return false;
+    if (pattern[p_pos] == '.') 
+        return match_recursive(pattern, text, p_pos + 1, t_pos + 1, captures, group_num);
+    if (p_pos+1 < pattern.size() && pattern[p_pos] == '\\' && pattern[p_pos+1] == 'd' && std::isdigit(text[t_pos]))
+        return match_recursive(pattern, text, p_pos + 2, t_pos + 1, captures, group_num);
+    if (p_pos+1 < pattern.size() && pattern[p_pos] == '\\' && pattern[p_pos+1] == 'w' && (std::isalnum(text[t_pos]) || text[t_pos]=='_'))
+        return match_recursive(pattern, text, p_pos + 2, t_pos + 1, captures, group_num);
+    if (pattern[p_pos] == text[t_pos])
+        return match_recursive(pattern, text, p_pos + 1, t_pos + 1, captures, group_num);
+
     return false;
 }
 
-// The core recursive engine. Returns match length or -1 on failure.
-int match_recursive(const string& pattern, const string& text, int& group_count) {
-    if (pattern.empty()) return 0;
-
-    if (pattern[0] == '$' && pattern.length() == 1) {
-        return text.empty() ? 0 : -1;
-    }
-
-    // Handle top-level alternation (pattern like "cat|dog")
-    int depth = 0;
-    for (int i = pattern.length() - 1; i >= 0; --i) {
-        if (pattern[i] == ')') depth++;
-        else if (pattern[i] == '(') depth--;
-        else if (pattern[i] == '|' && depth == 0) {
-            string left = pattern.substr(0, i);
-            string right = pattern.substr(i + 1);
-            
-            int original_group_count = group_count;
-            auto original_captures = captured_groups;
-
-            int len = match_recursive(left, text, group_count);
-            if (len != -1) return len;
-
-            group_count = original_group_count;
-            captured_groups = original_captures;
-
-            return match_recursive(right, text, group_count);
-        }
-    }
-    
-    // Determine the "atom" (the unit to be matched) and check for a quantifier after it.
-    size_t atom_len = 1;
-    if (pattern[0] == '\\' && pattern.length() > 1) {
-        atom_len = 2;
-    } else if (pattern[0] == '[') {
-        size_t end_bracket = pattern.find(']', 1);
-        if (end_bracket != string::npos) atom_len = end_bracket + 1;
-    } else if (pattern[0] == '(') {
-        int level = 0;
-        for (size_t i = 1; i < pattern.length(); ++i) {
-            if (pattern[i] == '(') level++;
-            else if (pattern[i] == ')') {
-                if (level-- == 0) {
-                    atom_len = i + 1;
-                    break;
-                }
-            }
-        }
-    }
-
-    char quantifier = (atom_len < pattern.length()) ? pattern[atom_len] : 0;
-    string atom = pattern.substr(0, atom_len);
-    string rest = pattern.substr(atom_len + (quantifier == '?' || quantifier == '+' ? 1 : 0));
-
-    if (quantifier == '?') {
-        int original_group_count = group_count;
-        auto original_captures = captured_groups;
-        
-        // Path A (skip atom): Try matching the rest of the pattern.
-        int len = match_recursive(rest, text, group_count);
-        if (len != -1) return len;
-        
-        // Path B (match atom): Restore state and try matching the atom, then the rest.
-        group_count = original_group_count;
-        captured_groups = original_captures;
-
-        int atom_match_len = match_recursive(atom, text, group_count);
-        if (atom_match_len != -1) {
-            int rest_len = match_recursive(rest, text.substr(atom_match_len), group_count);
-            if (rest_len != -1) return atom_match_len + rest_len;
-        }
-        return -1;
-    }
-
-    if (quantifier == '+') {
-        // Must match the atom at least once.
-        int atom_match_len = match_recursive(atom, text, group_count);
-        if (atom_match_len == -1) return -1;
-
-        string remaining_text = text.substr(atom_match_len);
-        
-        int original_group_count = group_count;
-        auto original_captures = captured_groups;
-
-        // --- START OF THE CRITICAL FIX ---
-        // Path A (Greedy): Match the quantified atom `A+` again on the remaining text.
-        int more_len = match_recursive(pattern.substr(0, atom_len + 1), remaining_text, group_count);
-        if (more_len != -1) return atom_match_len + more_len;
-
-        // Path B (Backtrack): If greedy path failed, restore state and match the rest of the pattern.
-        group_count = original_group_count;
-        captured_groups = original_captures;
-        // --- END OF THE CRITICAL FIX ---
-
-        int rest_len = match_recursive(rest, remaining_text, group_count);
-        if (rest_len != -1) return atom_match_len + rest_len;
-        
-        return -1;
-    }
-
-    // Handle the actual matching of the atom
-    if (pattern[0] == '(') {
-        string group_content = pattern.substr(1, atom_len - 2);
-        int current_capture_index = ++group_count;
-        int group_len = match_recursive(group_content, text, group_count);
-        if (group_len != -1) {
-            captured_groups[current_capture_index] = text.substr(0, group_len);
-            int rest_len = match_recursive(rest, text.substr(group_len), group_count);
-            if (rest_len != -1) return group_len + rest_len;
-        }
-        captured_groups.erase(current_capture_index); // Backtrack
-        return -1;
-    }
-    
-    if (text.empty()) return -1;
-
-    if (pattern[0] == '\\' && pattern.length() > 1) {
-        if (isdigit(pattern[1])) { // Backreference
-            int group_num = pattern[1] - '0';
-            if (captured_groups.count(group_num)) {
-                string captured = captured_groups[group_num];
-                if (text.rfind(captured, 0) == 0) {
-                    int rest_len = match_recursive(rest, text.substr(captured.length()), group_count);
-                    if (rest_len != -1) return captured.length() + rest_len;
-                }
-            }
-            return -1;
-        }
-        if ((pattern[1] == 'd' && isdigit(text[0])) || (pattern[1] == 'w' && (isalnum(text[0]) || text[0] == '_'))) {
-            int len = match_recursive(rest, text.substr(1), group_count);
-            if (len != -1) return 1 + len;
-        }
-        return -1;
-    }
-
-    if (pattern[0] == '[') {
-        bool is_negated = pattern[1] == '^';
-        string group = pattern.substr(is_negated ? 2 : 1, atom_len - (is_negated ? 2 : 1) -1);
-        bool found = group.find(text[0]) != string::npos;
-        if (is_negated != found) {
-            int len = match_recursive(rest, text.substr(1), group_count);
-            if (len != -1) return 1 + len;
-        }
-        return -1;
-    }
-
-    if (pattern[0] == '.' || pattern[0] == text[0]) {
-        int len = match_recursive(rest, text.substr(1), group_count);
-        if (len != -1) return 1 + len;
-    }
-
-    return -1;
+bool match_pattern(const std::string& input, const std::string& pattern) {
+    std::unordered_map<int, std::string> captures;
+    return match_recursive(pattern, input, 0, 0, captures, 1);
 }
 
 int main(int argc, char* argv[]) {
-    cout << unitbuf;
-    cerr << unitbuf;
-    if (argc != 3) {
-        cerr << "Expected two arguments" << endl;
-        return 1;
-    }
-    string flag = argv[1];
-    string pattern = argv[2];
-    if (flag != "-E") {
-        cerr << "Expected first argument to be '-E'" << endl;
-        return 1;
-    }
-    string input_line;
-    getline(cin, input_line);
-    if (match_pattern(input_line, pattern)) {
-        return 0;
-    } else {
-        return 1;
-    }
+    if (argc != 3) return 1;
+    if (std::string(argv[1]) != "-E") return 1;
+
+    std::string input; getline(std::cin, input);
+    std::string pattern = argv[2];
+    return match_pattern(input, pattern) ? 0 : 1;
 }
