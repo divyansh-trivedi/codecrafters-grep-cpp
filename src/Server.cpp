@@ -29,7 +29,7 @@ typedef enum
     END,
     LIST,
     ALT,
-    BACKREFERENCE, // New type for \1, \2, etc.
+    BACKREFERENCE, // For \1, \2, etc.
     ETK, // Error Token
 } RegType;
 
@@ -41,7 +41,7 @@ struct Re
     bool isNegative;
     Quantifier quantifier;
     std::vector<std::vector<Re>> alternatives;
-    int capture_group_id = 0; // New: To identify capture groups and backreferences
+    int capture_group_id = 0; // To identify capture groups and backreferences
 
     // Destructor to free allocated memory
     ~Re() {
@@ -57,7 +57,7 @@ struct Re
         isNegative = other.isNegative;
         quantifier = other.quantifier;
         alternatives = other.alternatives;
-        capture_group_id = other.capture_group_id; // New
+        capture_group_id = other.capture_group_id;
         if (other.ccl) {
             ccl = new char[strlen(other.ccl) + 1];
             strcpy(ccl, other.ccl);
@@ -76,7 +76,7 @@ struct Re
         isNegative = other.isNegative;
         quantifier = other.quantifier;
         alternatives = other.alternatives;
-        capture_group_id = other.capture_group_id; // New
+        capture_group_id = other.capture_group_id;
         if (other.ccl) {
             ccl = new char[strlen(other.ccl) + 1];
             strcpy(ccl, other.ccl);
@@ -110,10 +110,8 @@ public:
     
     std::vector<Re> regex;
 
-    // --- START OF MINIMAL CHANGE ---
-    // New: Static map to store captured strings. It's global to the matching process.
+    // Static map to store captured strings. It's global to the matching process.
     static unordered_map<int, string> captured_groups;
-    // --- END OF MINIMAL CHANGE ---
 
 private:
     std::string _pattern_str;
@@ -121,10 +119,8 @@ private:
     const char* _begin{nullptr};
     const char* _end{nullptr};
 
-    // --- START OF MINIMAL CHANGE ---
-    // New: Counter for capture groups during parsing
+    // Counter for capture groups during parsing
     int _capture_group_count = 0;
-    // --- END OF MINIMAL CHANGE ---
 
     bool isEof();
     bool consume();
@@ -140,10 +136,8 @@ private:
 // --- End of RegParser.h content ---
 // --- Start of RegParser.cpp content ---
 
-// --- START OF MINIMAL CHANGE ---
 // Initialize the static map for captured groups
 unordered_map<int, string> RegParser::captured_groups;
-// --- END OF MINIMAL CHANGE ---
 
 
 bool RegParser::parse()
@@ -217,7 +211,6 @@ bool RegParser::match_from_position(const char** start_pos, const std::vector<Re
     {
         const Re& current = regex[rIdx];
         
-        // --- START OF MINIMAL CHANGE ---
         // Handle backreferences first
         if (current.type == BACKREFERENCE) {
             if (captured_groups.count(current.capture_group_id)) {
@@ -230,7 +223,6 @@ bool RegParser::match_from_position(const char** start_pos, const std::vector<Re
             }
             return false; // Backreference not found or did not match
         }
-        // --- END OF MINIMAL CHANGE ---
 
         if (current.quantifier == PLUS) {
             const char* temp_c = c;
@@ -264,7 +256,6 @@ bool RegParser::match_from_position(const char** start_pos, const std::vector<Re
             return false;
         }
 
-        // --- START OF MINIMAL CHANGE ---
         // Rewritten ALT logic to handle backtracking and capturing
         if (current.type == ALT) {
             const char* group_start = c;
@@ -289,7 +280,6 @@ bool RegParser::match_from_position(const char** start_pos, const std::vector<Re
             // If no alternative led to a full match, the whole group fails.
             return false;
         }
-        // --- END OF MINIMAL CHANGE ---
 
         if (!match_current(c, regex, rIdx)) {
             return false;
@@ -465,11 +455,9 @@ Re RegParser::parseElement()
             current = makeRe(DIGIT);
         } else if (check('w')) {
             current = makeRe(ALPHANUM);
-        // --- START OF MINIMAL CHANGE ---
         } else if (isdigit(*_pattern)) {
             current = makeRe(BACKREFERENCE);
             current.capture_group_id = *_pattern - '0';
-        // --- END OF MINIMAL CHANGE ---
         } else {
             char* cstr = new char[2];
             cstr[0] = *_pattern;
@@ -528,9 +516,7 @@ Re RegParser::parseCharacterClass()
 Re RegParser::parseGroup()
 {
     Re altGp = makeRe(ALT);
-    // --- START OF MINIMAL CHANGE ---
     altGp.capture_group_id = ++_capture_group_count;
-    // --- END OF MINIMAL CHANGE ---
     std::vector<Re> current_sequence;
     bool isClosed = false;
 
@@ -592,10 +578,8 @@ bool match_pattern(const std::string& input_line, const std::string& pattern)
         const char* c = input_line.c_str();
         bool hasStartAnchor = !rp.regex.empty() && rp.regex[0].type == START;
         
-        // --- START OF MINIMAL CHANGE ---
         // Clear global captures before starting a new match
         RegParser::captured_groups.clear();
-        // --- END OF MINIMAL CHANGE ---
 
         if (hasStartAnchor)
         {
@@ -699,3 +683,4 @@ void printDebug(const std::vector<Re>& reList) {
     }
 }
 #endif
+
